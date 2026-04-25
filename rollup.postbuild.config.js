@@ -2,13 +2,13 @@ import commonjs from '@rollup/plugin-commonjs';
 import resolve from '@rollup/plugin-node-resolve';
 
 export default {
-  input: 'dist-tsc/services/ag-ui-middleware/src/index.js',
+  input: 'dist-tsc/index.js',
   output: {
     dir: 'dist',
     format: 'esm',
     sourcemap: true,
     preserveModules: true,
-    preserveModulesRoot: 'dist-tsc/services/ag-ui-middleware/src',
+    preserveModulesRoot: 'dist-tsc',
   },
   external: [
     /^node:/,

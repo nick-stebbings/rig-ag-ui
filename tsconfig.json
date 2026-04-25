@@ -20,6 +20,6 @@
     "allowSyntheticDefaultImports": true,
     "types": ["node", "vitest/globals"]
   },
-  "include": ["src/**/*", "../../shared/types/**/*"],
+  "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
 }
