@@ -7,6 +7,37 @@
  */
 import type { RigAgentAppConfig } from "../agents/rig_abstract_agent";
 
+function getJwtSubject(authToken: string | undefined): string | undefined {
+	if (!authToken) {
+		return undefined;
+	}
+
+	const [, payload] = authToken.split(".");
+	if (!payload) {
+		return undefined;
+	}
+
+	try {
+		const normalizedPayload = payload
+			.replace(/-/g, "+")
+			.replace(/_/g, "/")
+			.padEnd(Math.ceil(payload.length / 4) * 4, "=");
+		const claims = JSON.parse(
+			Buffer.from(normalizedPayload, "base64").toString("utf8"),
+		) as { sub?: unknown };
+
+		return typeof claims.sub === "string" ? claims.sub : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function isUuid(value: string): boolean {
+	return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+		value,
+	);
+}
+
 /**
  * Generic example configuration. All hooks return `undefined` / no-ops,
  * which causes RigAbstractAgent to fall back to its built-in defaults.
@@ -70,12 +101,9 @@ export const EXAMPLE_APP_CONFIG: RigAgentAppConfig = {
 		return rawState;
 	},
 
-	durableSessionInitializer: async (
-		_authToken: string | undefined,
-	): Promise<Record<string, unknown>> => ({
-		// Return metadata your Rig backend expects on session creation.
-		// To pass user identity to your Rig backend, implement this hook.
-		// The authToken is available in the request context.
-		// Example: { userId: parseJwt(authToken).sub }
-	}),
+	durableSessionInitializer: async (authToken: string | undefined) => {
+		// The bundled Rig backend expects `user_id` to enable tier-aware tools.
+		const userId = getJwtSubject(authToken);
+		return userId && isUuid(userId) ? { user_id: userId } : {};
+	},
 };

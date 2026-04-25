@@ -241,6 +241,9 @@ export class RigAbstractAgent extends EventEmitter {
 	/** Current auth token for backend requests */
 	private currentAuthToken?: string;
 
+	/** Metadata derived from the current request auth token. */
+	private currentSessionMetadata: Record<string, unknown> = {};
+
 	/** Application-specific configuration hooks */
 	private appConfig: RigAgentAppConfig;
 
@@ -406,6 +409,32 @@ export class RigAbstractAgent extends EventEmitter {
 		}
 	}
 
+	private async getSessionMetadata(
+		authToken: string | undefined,
+	): Promise<Record<string, unknown>> {
+		if (!this.appConfig.durableSessionInitializer) {
+			return {};
+		}
+
+		try {
+			return await this.appConfig.durableSessionInitializer(authToken);
+		} catch (error) {
+			console.error(
+				"[RigAgent] Failed to derive session metadata:",
+				error instanceof Error ? error.message : error,
+			);
+			return {};
+		}
+	}
+
+	private getUserIdFromMetadata(): string | undefined {
+		const userId =
+			this.currentSessionMetadata.user_id ?? this.currentSessionMetadata.userId;
+		return typeof userId === "string" && userId.length > 0
+			? userId
+			: undefined;
+	}
+
 	/**
 	 * Start an agent run and return an Observable of AG-UI protocol events.
 	 *
@@ -440,6 +469,9 @@ export class RigAbstractAgent extends EventEmitter {
 		const { runId, threadId, messages = [], context = [], authToken } = input;
 
 		try {
+			this.currentAuthToken = authToken;
+			this.currentSessionMetadata = await this.getSessionMetadata(authToken);
+
 			// Update thread ID if provided
 			if (threadId) {
 				this.threadId = threadId;
@@ -499,6 +531,7 @@ export class RigAbstractAgent extends EventEmitter {
 								const response = await this.rigApiClient.post("/sessions", {
 									user_context: {
 										agent_id: agentType,
+										user_id: this.getUserIdFromMetadata(),
 										context: context,
 									},
 								});
@@ -605,9 +638,6 @@ export class RigAbstractAgent extends EventEmitter {
 		// a separate one.
 		const messageId = uuidv4();
 
-		// Store auth token for use in durable session initialization
-		this.currentAuthToken = authToken;
-
 		// Emit message start event
 		const messageStartEvent: BaseEvent = {
 			type: EventType.TEXT_MESSAGE_START,
@@ -637,6 +667,7 @@ export class RigAbstractAgent extends EventEmitter {
 					content: message.content,
 					// Forward auth token for workflow execution (JWT from original request)
 					auth_token: authToken,
+					user_id: this.getUserIdFromMetadata(),
 				},
 				{
 					responseType: "stream",
