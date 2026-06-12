@@ -430,9 +430,7 @@ export class RigAbstractAgent extends EventEmitter {
 	private getUserIdFromMetadata(): string | undefined {
 		const userId =
 			this.currentSessionMetadata.user_id ?? this.currentSessionMetadata.userId;
-		return typeof userId === "string" && userId.length > 0
-			? userId
-			: undefined;
+		return typeof userId === "string" && userId.length > 0 ? userId : undefined;
 	}
 
 	/**
@@ -566,6 +564,7 @@ export class RigAbstractAgent extends EventEmitter {
 						rigSessionId,
 						latestMessage,
 						runId,
+						context,
 						observer,
 						subscriber,
 						authToken,
@@ -627,6 +626,7 @@ export class RigAbstractAgent extends EventEmitter {
 		sessionId: string,
 		message: Message,
 		runId: string,
+		context: Array<{ type: string; value: unknown }>,
 		// biome-ignore lint/suspicious/noExplicitAny: RxJS Observer type from Observable pattern
 		observer: any,
 		subscriber?: AgentSubscriber,
@@ -668,6 +668,7 @@ export class RigAbstractAgent extends EventEmitter {
 					// Forward auth token for workflow execution (JWT from original request)
 					auth_token: authToken,
 					user_id: this.getUserIdFromMetadata(),
+					metadata: context.length > 0 ? { context } : undefined,
 				},
 				{
 					responseType: "stream",

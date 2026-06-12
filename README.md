@@ -76,6 +76,9 @@ All variables are read at startup. Copy `.env.example` as a starting point.
 | `AGENT_REGISTRY` | *(unset)* | Static JSON object mapping agent IDs to metadata; returned by `/copilotkit/info` |
 | `AGENT_DISCOVERY_URL` | *(unset)* | Optional discovery endpoint the middleware queries for agent metadata |
 | `AGENT_DISCOVERY_HEADERS` | *(unset)* | Optional JSON object of HTTP headers used for `AGENT_DISCOVERY_URL` requests |
+| `AGUI_CONTEXT_FORWARD_HEADERS` | *(unset)* | Comma-separated request header names to copy into Rig context metadata |
+| `AGUI_CONTEXT_FORWARD_HEADER_PREFIXES` | *(unset)* | Comma-separated request header prefixes to copy into Rig context metadata for non-browser/server clients |
+| `AGUI_EXTRA_ALLOWED_HEADERS` | *(unset)* | Extra CORS request headers allowed by the middleware but not forwarded into Rig context |
 | `ALLOWED_ORIGINS` | `*` | Comma-separated CORS origins, or `*` to allow all |
 | `RATE_LIMIT_WINDOW_MS` | `900000` | Rate-limit window in milliseconds (15 minutes) |
 | `RATE_LIMIT_MAX_REQUESTS` | `100` | Max requests per IP per window |
@@ -125,6 +128,20 @@ or an agent map:
 ```
 
 If the discovery endpoint needs authentication, set `AGENT_DISCOVERY_HEADERS` to a JSON object of request headers.
+
+### Forwarding Client Context Headers
+
+The middleware is product-agnostic and does not forward arbitrary custom headers by default. To pass deployment-specific client context to Rig, opt in with comma-separated header names or prefixes. Forwarded headers are appended to the Rig context array as generic `http_header` entries and are also included in per-message metadata for reused sessions.
+
+Browser clients should use `AGUI_CONTEXT_FORWARD_HEADERS` so CORS can allow the same explicit names. `AGUI_CONTEXT_FORWARD_HEADER_PREFIXES` is useful for trusted server-to-server clients where CORS preflight is not involved.
+
+For Agentiff vertical scoping, configure the deployment, not the middleware code:
+
+```bash
+AGUI_CONTEXT_FORWARD_HEADERS=x-agentiff-vertical-id,x-agentiff-surface,x-agentiff-agent-runtime
+```
+
+Use `AGUI_EXTRA_ALLOWED_HEADERS` for headers that must pass CORS but should not be forwarded to Rig.
 
 ## Running standalone
 

@@ -31,6 +31,97 @@ interface ErrorResponse {
 	details?: Record<string, unknown>;
 }
 
+type RunContextEntry = {
+	type: string;
+	value: unknown;
+	[key: string]: unknown;
+};
+
+const BASE_ALLOWED_HEADERS = [
+	"Content-Type",
+	"Authorization",
+	"X-API-Key",
+	"X-Requested-With",
+	"traceparent",
+	"tracestate",
+] as const;
+
+function parseCsvEnv(value: string | undefined): string[] {
+	if (!value) return [];
+
+	return value
+		.split(",")
+		.map((item) => item.trim().toLowerCase())
+		.filter(Boolean);
+}
+
+function uniqueHeaderNames(headers: readonly string[]): string[] {
+	const seen = new Set<string>();
+	const result: string[] = [];
+
+	for (const header of headers) {
+		const normalized = header.trim().toLowerCase();
+		if (!normalized || seen.has(normalized)) continue;
+		seen.add(normalized);
+		result.push(header);
+	}
+
+	return result;
+}
+
+function buildAllowedHeaders(): string[] {
+	return uniqueHeaderNames([
+		...BASE_ALLOWED_HEADERS,
+		...parseCsvEnv(process.env.AGUI_EXTRA_ALLOWED_HEADERS),
+		...parseCsvEnv(process.env.AGUI_CONTEXT_FORWARD_HEADERS),
+	]);
+}
+
+function normalizeHeaderValue(
+	value: string | string[] | undefined,
+): string | null {
+	if (Array.isArray(value)) {
+		return value.join(",").trim() || null;
+	}
+
+	return value?.trim() || null;
+}
+
+function collectForwardedHeaderContext(
+	headers: Request["headers"],
+): RunContextEntry[] {
+	const explicitHeaders = new Set(
+		parseCsvEnv(process.env.AGUI_CONTEXT_FORWARD_HEADERS),
+	);
+	const headerPrefixes = parseCsvEnv(
+		process.env.AGUI_CONTEXT_FORWARD_HEADER_PREFIXES,
+	);
+
+	if (explicitHeaders.size === 0 && headerPrefixes.length === 0) {
+		return [];
+	}
+
+	const entries: RunContextEntry[] = [];
+	for (const [name, rawValue] of Object.entries(headers)) {
+		const normalizedName = name.toLowerCase();
+		const shouldForward =
+			explicitHeaders.has(normalizedName) ||
+			headerPrefixes.some((prefix) => normalizedName.startsWith(prefix));
+		const value = shouldForward ? normalizeHeaderValue(rawValue) : null;
+
+		if (!value) continue;
+
+		entries.push({
+			type: "http_header",
+			name: normalizedName,
+			value,
+			[normalizedName]: value,
+		});
+	}
+
+	return entries;
+}
+
 /**
  * Zod validation schemas for incoming request bodies.
  *
@@ -189,14 +280,7 @@ export class AguiMiddlewareApp {
 				origin: corsOrigin,
 				credentials: true,
 				methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-				allowedHeaders: [
-					"Content-Type",
-					"Authorization",
-					"X-API-Key",
-					"X-Requested-With",
-					"traceparent",
-					"tracestate",
-				],
+				allowedHeaders: buildAllowedHeaders(),
 				exposedHeaders: ["X-Correlation-Id", "X-Request-Id"],
 				preflightContinue: false,
 				optionsSuccessStatus: 204,
@@ -423,15 +507,20 @@ export class AguiMiddlewareApp {
 			// Associate stream with agent session
 			this.sessionBridge.associateStreamSession(agentId, streamSessionId);
 
+			const runContext: RunContextEntry[] = [
+				...(context?.map((ctx) => ({
+					type: ctx.type,
+					value: ctx.value as unknown,
+				})) ?? []),
+				...collectForwardedHeaderContext(req.headers),
+			];
+
 			// Start agent run - convert tools to the expected format
 			await this.sessionBridge.startAgentRun(agentId, {
 				runId,
 				messages,
 				tools: tools?.map((tool) => ({ type: "tool", value: tool })),
-				context: context?.map((ctx) => ({
-					type: ctx.type,
-					value: ctx.value as unknown,
-				})),
+				context: runContext,
 			});
 		} catch (error) {
 			console.error("Agent run error:", error);
@@ -652,6 +741,15 @@ export class AguiMiddlewareApp {
 			// lack of support for fetch+ReadableStream SSE.
 			const streamMode = req.headers["x-stream-mode"] as string | undefined;
 			const isDeferred = streamMode === "deferred";
+			const runContext: RunContextEntry[] = [
+				{ type: "agent_id", value: agentId },
+				{ type: "thread_id", value: threadId },
+				...context.map((ctx) => ({
+					type: ctx.description,
+					value: ctx.value as unknown,
+				})),
+				...collectForwardedHeaderContext(req.headers),
+			];
 
 			// Create or get session
 			await this.sessionBridge.createSession(sessionId, {
@@ -685,14 +783,7 @@ export class AguiMiddlewareApp {
 					runId,
 					messages: agentMessages,
 					tools: wrappedTools,
-					context: [
-						{ type: "agent_id", value: agentId },
-						{ type: "thread_id", value: threadId },
-						...context.map((ctx) => ({
-							type: ctx.description,
-							value: ctx.value as unknown,
-						})),
-					],
+					context: runContext,
 					authToken,
 				});
 
@@ -723,14 +814,7 @@ export class AguiMiddlewareApp {
 				runId,
 				messages: agentMessages,
 				tools: wrappedTools,
-				context: [
-					{ type: "agent_id", value: agentId },
-					{ type: "thread_id", value: threadId },
-					...context.map((ctx) => ({
-						type: ctx.description,
-						value: ctx.value as unknown,
-					})),
-				],
+				context: runContext,
 				authToken,
 			});
 
