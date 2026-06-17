@@ -223,8 +223,41 @@ export interface AgentSubscriber {
  *   .subscribe({ next: (event) => console.log(event.type) });
  * ```
  */
+
+/**
+ * Parses a `__TOOL_RESULT__:{internal_call_id}:{json}` marker chunk emitted
+ * by Rig's general agent (see `general.rs`'s stream loop) into its parts.
+ *
+ * Validates that the payload is well-formed JSON without interpreting it —
+ * the raw JSON string is forwarded verbatim as the AG-UI `content` field, to
+ * be parsed client-side by CopilotKit's tool renderer. Returns `null` on a
+ * malformed marker so the caller can degrade silently, consistent with how
+ * `__STATE_UPDATE__` parsing already degrades.
+ */
+export function parseToolResultMarker(
+	content: string,
+): { internalCallId: string; resultJson: string } | null {
+	const resultData = content.substring("__TOOL_RESULT__:".length);
+	const firstColonIndex = resultData.indexOf(":");
+	if (firstColonIndex <= 0) {
+		return null;
+	}
+
+	const internalCallId = resultData.substring(0, firstColonIndex);
+	const resultJson = resultData.substring(firstColonIndex + 1);
+
+	try {
+		JSON.parse(resultJson);
+	} catch {
+		return null;
+	}
+
+	return { internalCallId, resultJson };
+}
+
 export class RigAbstractAgent extends EventEmitter {
 	public agentId: string;
+
 	public description: string;
 	public threadId?: string;
 	public messages: Message[] = [];
@@ -685,6 +718,12 @@ export class RigAbstractAgent extends EventEmitter {
 			let accumulatedContent = "";
 			let streamCompleted = false;
 			let chunksReceived = 0;
+			// Rig executes tool calls strictly sequentially within a turn (it
+			// awaits each tool's result before resuming the stream), so at most
+			// one entry is ever pending. A FIFO queue still correlates correctly
+			// even if that assumption changes, without needing Rig's internal
+			// call id (which the __TOOL_CALL__ marker doesn't carry).
+			const pendingToolCalls: string[] = [];
 
 			response.data.on("data", (chunk: Buffer) => {
 				chunksReceived++;
@@ -707,7 +746,8 @@ export class RigAbstractAgent extends EventEmitter {
 								const contentPrefix = content.substring(0, 30);
 								if (
 									content.startsWith("__TOOL_CALL__") ||
-									content.startsWith("__STATE_UPDATE__")
+									content.startsWith("__STATE_UPDATE__") ||
+									content.startsWith("__TOOL_RESULT__")
 								) {
 									console.log(
 										`[RigAgent] Detected special marker: ${contentPrefix}...`,
@@ -734,6 +774,7 @@ export class RigAbstractAgent extends EventEmitter {
 										try {
 											// Parse to validate JSON format (throws if invalid)
 											const parsedArgs = JSON.parse(toolArgsJson);
+											pendingToolCalls.push(toolCallId);
 
 											// Emit AG-UI standard TOOL_CALL_START event
 											// Include parsed args so GraphQL server can create ActionExecutionMessage immediately
@@ -981,6 +1022,44 @@ export class RigAbstractAgent extends EventEmitter {
 												parseError,
 												eventDataJson,
 											);
+										}
+									}
+								}
+								// Feature: forward the structured result of a resolved tool call so
+								// CopilotKit's useRenderTool can pick it up via its `result` prop.
+								else if (content.startsWith("__TOOL_RESULT__:")) {
+									const parsed = parseToolResultMarker(content);
+									if (!parsed) {
+										console.error(
+											"Failed to parse tool result marker:",
+											content.substring(0, 200),
+										);
+									} else {
+										const { internalCallId, resultJson } = parsed;
+										const toolCallId = pendingToolCalls.shift();
+										if (!toolCallId) {
+											console.warn(
+												`[RigAgent] Received tool result for ${internalCallId} with no pending tool call to correlate it to; dropping.`,
+											);
+										} else {
+											console.log(
+												`[RigAgent] Tool result for ${toolCallId} (internal_call_id=${internalCallId}): ${resultJson.substring(0, 100)}`,
+											);
+
+											const toolResultEvent: BaseEvent = {
+												type: EventType.TOOL_CALL_RESULT,
+												threadId: this.threadId,
+												runId,
+												messageId: uuidv4(),
+												timestamp: Date.now(),
+												data: {
+													toolCallId,
+													content: resultJson,
+													role: "tool",
+												},
+											};
+											observer.next(toolResultEvent);
+											subscriber?.next?.(toolResultEvent);
 										}
 									}
 								}
