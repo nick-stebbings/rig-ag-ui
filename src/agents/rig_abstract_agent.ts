@@ -12,6 +12,18 @@ import {
 	TRACEPARENT_HEADER,
 } from "../middleware/tracing";
 
+const UUID_PATTERN =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Whether a candidate thread id is a UUID the Rig backend will accept as a
+ * client-supplied session id. Non-UUID thread ids (e.g. a client's
+ * `thread-<timestamp>` fallback) keep the server-minted-id behavior.
+ */
+export function isUuid(candidate: string | undefined): candidate is string {
+	return typeof candidate === "string" && UUID_PATTERN.test(candidate);
+}
+
 /**
  * Application-specific configuration hooks for customizing agent behavior.
  *
@@ -565,6 +577,16 @@ export class RigAbstractAgent extends EventEmitter {
 										user_id: this.getUserIdFromMetadata(),
 										context: context,
 									},
+									// Pass the client's AG-UI threadId through so the rig
+									// session is created UNDER that id (the backend
+									// get-or-creates): the thread id IS the session id,
+									// which is what the threads drawer, rehydration, and
+									// the /sessions/{id}/messages read path all key on.
+									// Only a valid UUID is passed — the backend rejects
+									// anything else.
+									...(isUuid(this.threadId)
+										? { session_id: this.threadId }
+										: {}),
 								});
 								span.setAttribute("rig.session_id", response.data.session_id);
 								span.setStatus({ code: SpanStatusCode.OK });
