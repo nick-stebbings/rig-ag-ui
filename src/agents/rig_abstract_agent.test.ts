@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseToolResultMarker } from "./rig_abstract_agent";
+import { isUuid, parseToolResultMarker } from "./rig_abstract_agent";
 
 describe("parseToolResultMarker", () => {
 	it("parses a well-formed __TOOL_RESULT__ marker into its parts", () => {
@@ -33,5 +33,22 @@ describe("parseToolResultMarker", () => {
 		const marker = "__TOOL_RESULT__:no-second-colon-here";
 
 		expect(parseToolResultMarker(marker)).toBeNull();
+	});
+});
+
+describe("isUuid", () => {
+	it("accepts a canonical lowercase UUID (client crypto.randomUUID form)", () => {
+		expect(isUuid("083f404e-41bb-54a1-a464-a226df4ce807")).toBe(true);
+	});
+
+	it("accepts uppercase hex", () => {
+		expect(isUuid("083F404E-41BB-54A1-A464-A226DF4CE807")).toBe(true);
+	});
+
+	it("rejects the client's non-UUID thread fallback and junk", () => {
+		expect(isUuid("thread-1752522000-abcdef12")).toBe(false);
+		expect(isUuid("")).toBe(false);
+		expect(isUuid(undefined)).toBe(false);
+		expect(isUuid("083f404e41bb54a1a464a226df4ce807")).toBe(false);
 	});
 });
