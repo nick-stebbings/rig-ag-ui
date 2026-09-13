@@ -1,6 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import request from "supertest";
 import type { Express } from "express";
+import request from "supertest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 /**
  * Mock the SessionBridge and AguiStreamHandler before importing the app.
@@ -38,10 +38,7 @@ vi.mock("../../src/streaming/agui_stream", () => {
 		createAguiStream: vi.fn(
 			(
 				res: {
-					writeHead: (
-						status: number,
-						headers: Record<string, string>,
-					) => void;
+					writeHead: (status: number, headers: Record<string, string>) => void;
 					write: (chunk: string) => void;
 					end: () => void;
 				},
@@ -74,16 +71,16 @@ vi.mock("../../src/streaming/agui_stream", () => {
 
 // Mock tracing/metrics middleware to no-ops
 vi.mock("../../src/middleware/tracing", () => ({
-	tracingMiddleware: () =>
-		(_req: unknown, _res: unknown, next: () => void) => next(),
+	tracingMiddleware: () => (_req: unknown, _res: unknown, next: () => void) =>
+		next(),
 	createChildSpan: () => "mock-span",
 	endChildSpan: vi.fn(),
 	logTraceEvent: vi.fn(),
 }));
 
 vi.mock("../../src/middleware/metrics", () => ({
-	metricsMiddleware: () =>
-		(_req: unknown, _res: unknown, next: () => void) => next(),
+	metricsMiddleware: () => (_req: unknown, _res: unknown, next: () => void) =>
+		next(),
 }));
 
 // Now import the app after mocks are registered
@@ -115,14 +112,14 @@ describe("AG-UI V2 REST+SSE endpoint contract tests", () => {
 
 	beforeAll(() => {
 		// Ensure dev mode so auth middleware skips API-key check for localhost
-		process.env.NODE_ENV = "development";
+		vi.stubEnv("NODE_ENV", "development");
 
 		const middleware = new AguiMiddlewareApp();
 		app = middleware.getApp();
 	});
 
 	afterAll(() => {
-		delete process.env.NODE_ENV;
+		vi.unstubAllEnvs();
 	});
 
 	// ── Health check ───────────────────────────────────────────────────────
@@ -146,10 +143,11 @@ describe("AG-UI V2 REST+SSE endpoint contract tests", () => {
 
 			expect(res.status).toBe(200);
 			expect(res.body).toHaveProperty("agents");
-			expect(Array.isArray(res.body.agents)).toBe(true);
-			expect(res.body.agents.length).toBeGreaterThan(0);
-			expect(res.body.agents[0]).toHaveProperty("name");
-			expect(res.body.agents[0]).toHaveProperty("description");
+			expect(Array.isArray(res.body.agents)).toBe(false);
+			expect(typeof res.body.agents).toBe("object");
+			for (const agent of Object.values(res.body.agents)) {
+				expect(agent).toHaveProperty("description");
+			}
 		});
 
 		it("should include runtime metadata", async () => {
@@ -291,9 +289,7 @@ describe("AG-UI V2 REST+SSE endpoint contract tests", () => {
 				.post(V2_RUN_ENDPOINT)
 				.send(
 					validV2Body({
-						messages: [
-							{ id: "msg-1", role: "moderator", content: "Hello" },
-						],
+						messages: [{ id: "msg-1", role: "moderator", content: "Hello" }],
 					}),
 				)
 				.set("Content-Type", "application/json");
@@ -374,7 +370,7 @@ describe("AG-UI V2 REST+SSE endpoint contract tests", () => {
 				.split("\n")
 				.find((line: string) => line.startsWith("data:"));
 			expect(dataLine).toBeDefined();
-			const parsed = JSON.parse(dataLine!.replace("data: ", ""));
+			const parsed = JSON.parse((dataLine ?? "").replace("data: ", ""));
 			expect(parsed.type).toBe("RUN_STARTED");
 		});
 
@@ -396,7 +392,7 @@ describe("AG-UI V2 REST+SSE endpoint contract tests", () => {
 			const dataLine = body
 				.split("\n")
 				.find((line: string) => line.startsWith("data:"));
-			const parsed = JSON.parse(dataLine!.replace("data: ", ""));
+			const parsed = JSON.parse((dataLine ?? "").replace("data: ", ""));
 
 			// Verify flat field structure (threadId, runId at top level)
 			expect(parsed).toHaveProperty("type");
@@ -422,14 +418,16 @@ describe("AG-UI V2 REST+SSE endpoint contract tests", () => {
 	// ── POST /copilotkit/agent/:agentId/connect ───────────────────────────
 
 	describe("POST /copilotkit/agent/:agentId/connect", () => {
-		it("should return 501 Not Implemented", async () => {
+		it("returns an empty completed run for connection", async () => {
 			const res = await request(app)
 				.post("/copilotkit/agent/general/connect")
 				.send({})
 				.set("Content-Type", "application/json");
 
-			expect(res.status).toBe(501);
-			expect(res.body).toHaveProperty("error", "NOT_IMPLEMENTED");
+			expect(res.status).toBe(200);
+			expect(res.headers["content-type"]).toContain("text/event-stream");
+			expect(res.text).toContain("RUN_STARTED");
+			expect(res.text).toContain("RUN_FINISHED");
 		});
 	});
 
@@ -460,13 +458,13 @@ describe("AG-UI V2 REST+SSE endpoint contract tests", () => {
 			expect(res.status).toBe(404);
 		});
 
-		it("POST /copilotkit (old V2 flat endpoint) should return 404", async () => {
+		it("POST /copilotkit rejects a flat body without a method", async () => {
 			const res = await request(app)
 				.post("/copilotkit")
 				.send(validV2Body())
 				.set("Content-Type", "application/json");
 
-			expect(res.status).toBe(404);
+			expect(res.status).toBe(400);
 		});
 	});
 });

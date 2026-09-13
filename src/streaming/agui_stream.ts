@@ -208,7 +208,9 @@ export class AguiStreamHandler extends EventEmitter {
 						reason: "client_disconnect",
 					},
 				};
-				this.writeV2SSEEvent(session.response, closeEvent);
+				if (!session.response.writableEnded && !session.response.destroyed) {
+					this.writeV2SSEEvent(session.response, closeEvent);
+				}
 
 				// End the response
 				session.response.end();
@@ -282,7 +284,15 @@ export class AguiStreamHandler extends EventEmitter {
 	private writeV2SSEEvent(response: Response, event: BaseEvent): void {
 		// Flatten: spread data fields to top level, remove nested data key
 		const { data, ...rest } = event;
-		const flat = { ...rest, ...data };
+		const internalTypes = [
+			EventType.AGENT_STATUS_UPDATE,
+			EventType.AGENT_STATE_UPDATE,
+			EventType.THINKING_DISPLAY,
+			EventType.TOOL_EXECUTION,
+		];
+		const flat = internalTypes.includes(event.type)
+			? { ...rest, type: "CUSTOM", name: event.type, value: data ?? {} }
+			: { ...rest, ...data };
 		response.write(`data: ${JSON.stringify(flat)}\n\n`);
 	}
 

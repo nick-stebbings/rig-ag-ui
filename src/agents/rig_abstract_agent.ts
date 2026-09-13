@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { StringDecoder } from "node:string_decoder";
 import { SpanKind, SpanStatusCode, trace } from "@opentelemetry/api";
 import axios, {
 	type AxiosInstance,
@@ -11,6 +12,11 @@ import {
 	REQUEST_ID_HEADER,
 	TRACEPARENT_HEADER,
 } from "../middleware/tracing";
+import {
+	type AguiRunEnvelope,
+	FRONTEND_TOOL_MARKER,
+	parseFrontendToolCall,
+} from "./agui_contract";
 
 const UUID_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -193,6 +199,7 @@ export interface AgentState {
  * Input parameters for starting an agent run via {@link RigAbstractAgent.runAgent}.
  */
 export interface RunAgentInput {
+	agui?: AguiRunEnvelope;
 	runId: string;
 	threadId?: string;
 	messages?: Message[];
@@ -509,7 +516,14 @@ export class RigAbstractAgent extends EventEmitter {
 		observer: any,
 		subscriber?: AgentSubscriber,
 	): Promise<void> {
-		const { runId, threadId, messages = [], context = [], authToken } = input;
+		const {
+			runId,
+			threadId,
+			messages = [],
+			context = [],
+			authToken,
+			agui,
+		} = input;
 
 		try {
 			this.currentAuthToken = authToken;
@@ -623,6 +637,7 @@ export class RigAbstractAgent extends EventEmitter {
 						observer,
 						subscriber,
 						authToken,
+						agui,
 					);
 				} else {
 					// No messages to process, complete immediately
@@ -636,6 +651,9 @@ export class RigAbstractAgent extends EventEmitter {
 				if (rigError instanceof Error && rigError.stack) {
 					console.error("Stack:", rigError.stack);
 				}
+
+				// V2 failures must not become successful tool continuations.
+				if (agui) throw rigError;
 
 				// Simulate response for testing/demo purposes
 				if (messages.length > 0) {
@@ -686,6 +704,7 @@ export class RigAbstractAgent extends EventEmitter {
 		observer: any,
 		subscriber?: AgentSubscriber,
 		authToken?: string,
+		agui?: AguiRunEnvelope,
 	): Promise<void> {
 		// Always generate a NEW messageId for the assistant response.
 		// Using the input message's ID would cause defaultApplyEvents to
@@ -719,11 +738,17 @@ export class RigAbstractAgent extends EventEmitter {
 			const response = await this.rigApiClient.post(
 				messageUrl,
 				{
-					content: message.content,
+					// An old Rig server must reject a tool result, not read it as user text.
+					content:
+						agui?.messages.at(-1)?.role === "tool" ? "" : message.content,
 					// Forward auth token for workflow execution (JWT from original request)
 					auth_token: authToken,
 					user_id: this.getUserIdFromMetadata(),
-					metadata: context.length > 0 ? { context } : undefined,
+					metadata: agui
+						? { context, ag_ui: agui }
+						: context.length > 0
+							? { context }
+							: undefined,
 				},
 				{
 					responseType: "stream",
@@ -739,7 +764,25 @@ export class RigAbstractAgent extends EventEmitter {
 			// Process the streaming response
 			let accumulatedContent = "";
 			let streamCompleted = false;
-			let chunksReceived = 0;
+			const decoder = new StringDecoder("utf8");
+			let pendingLine = "";
+			const frontendCalls = new Map<string, string>();
+			const failStream = (error: Error) => {
+				if (streamCompleted) return;
+				streamCompleted = true;
+				this.state.status = "errored";
+				const event: BaseEvent = {
+					type: EventType.RUN_ERROR,
+					threadId: this.threadId,
+					runId,
+					data: { message: error.message, code: "RIG_STREAM_ERROR" },
+				};
+				observer.next(event);
+				subscriber?.next?.(event);
+				observer.error(error);
+				subscriber?.error?.(error);
+				response.data.destroy();
+			};
 			// Rig executes tool calls strictly sequentially within a turn (it
 			// awaits each tool's result before resuming the stream), so at most
 			// one entry is ever pending. A FIFO queue still correlates correctly
@@ -748,17 +791,68 @@ export class RigAbstractAgent extends EventEmitter {
 			const pendingToolCalls: string[] = [];
 
 			response.data.on("data", (chunk: Buffer) => {
-				chunksReceived++;
-				console.log(
-					`[RigAgent] Received chunk #${chunksReceived}:`,
-					chunk.toString().substring(0, 200),
-				);
-				const lines = chunk.toString().split("\n");
+				if (streamCompleted) return;
+				pendingLine += decoder.write(chunk);
+				const lines = pendingLine.split("\n");
+				pendingLine = lines.pop() ?? "";
+				if (pendingLine.length > 10 * 1024 * 1024) {
+					failStream(new Error("Rig stream event exceeds 10 MiB"));
+					return;
+				}
 
 				for (const line of lines) {
-					if (line.startsWith("data: ")) {
+					if (line.startsWith("data:")) {
 						try {
-							const eventData = JSON.parse(line.slice(6));
+							const eventData = JSON.parse(line.slice(5).trimStart());
+							const marker =
+								eventData.content ??
+								eventData.chunk?.content ??
+								eventData.data?.chunk?.content;
+							if (
+								typeof marker === "string" &&
+								marker.startsWith(FRONTEND_TOOL_MARKER)
+							) {
+								const call = parseFrontendToolCall(marker, agui?.tools ?? []);
+								const signature = JSON.stringify(call);
+								const previous = frontendCalls.get(call.id);
+								if (previous && previous !== signature)
+									throw new Error(
+										"Rig reused a frontend call ID with different arguments",
+									);
+								if (!previous) {
+									frontendCalls.set(call.id, signature);
+									for (const event of [
+										{
+											type: EventType.TOOL_CALL_START,
+											data: {
+												toolCallId: call.id,
+												toolCallName: call.name,
+												parentMessageId: messageId,
+											},
+										},
+										{
+											type: EventType.TOOL_CALL_ARGS,
+											data: {
+												toolCallId: call.id,
+												delta: JSON.stringify(call.arguments),
+											},
+										},
+										{
+											type: EventType.TOOL_CALL_END,
+											data: { toolCallId: call.id },
+										},
+									]) {
+										const output: BaseEvent = {
+											...event,
+											threadId: this.threadId,
+											runId,
+										};
+										observer.next(output);
+										subscriber?.next?.(output);
+									}
+								}
+								continue;
+							}
 
 							// Handle actual Rig API format: {"content": "...", "sequence": N, "is_final": bool}
 							if (eventData.content !== undefined) {
@@ -1085,8 +1179,8 @@ export class RigAbstractAgent extends EventEmitter {
 										}
 									}
 								}
-								// Only process non-empty content or when is_final is true
-								else if (content || eventData.is_final) {
+								// AG-UI text deltas must contain text. The stream end closes the run.
+								else if (content) {
 									accumulatedContent += content;
 
 									// Emit content chunk event
@@ -1154,7 +1248,11 @@ export class RigAbstractAgent extends EventEmitter {
 								}
 							}
 						} catch (parseError) {
-							console.error("Failed to parse Rig API event:", line, parseError);
+							if (agui) {
+								failStream(new Error("Invalid Rig stream event"));
+								return;
+							}
+							console.error("Failed to parse Rig API event:", parseError);
 						}
 					}
 				}
@@ -1162,6 +1260,10 @@ export class RigAbstractAgent extends EventEmitter {
 
 			response.data.on("end", () => {
 				if (streamCompleted) return;
+				if (agui && (pendingLine + decoder.end()).trim()) {
+					failStream(new Error("Rig stream ended with an incomplete event"));
+					return;
+				}
 				streamCompleted = true;
 
 				// Emit message end event
@@ -1194,9 +1296,18 @@ export class RigAbstractAgent extends EventEmitter {
 				response.data.destroy();
 			});
 
+			response.data.on("close", () => {
+				if (agui && !streamCompleted)
+					failStream(new Error("Rig stream closed before completion"));
+			});
+
 			// biome-ignore lint/suspicious/noExplicitAny: Node.js stream error event
 			response.data.on("error", (error: any) => {
 				if (streamCompleted) return;
+				if (agui) {
+					failStream(error);
+					return;
+				}
 				streamCompleted = true;
 
 				console.error("❌ Rig API stream error:", error);
