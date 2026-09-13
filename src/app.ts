@@ -11,6 +11,11 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
+import {
+	AguiMessageSchema,
+	type AguiRunEnvelope,
+	AguiToolSchema,
+} from "./agents/agui_contract";
 import { metricsMiddleware } from "./middleware/metrics";
 import {
 	createChildSpan,
@@ -174,30 +179,6 @@ const AgentInterruptRequestSchema = z.object({
  * The client sends a POST to /copilotkit/agent/:agentId/run with
  * messages/tools and receives an SSE stream of AG-UI protocol events.
  */
-const AguiV2MessageSchema = z.object({
-	id: z.string(),
-	role: z.enum([
-		"user",
-		"assistant",
-		"system",
-		"developer",
-		"tool",
-		"activity",
-		"reasoning",
-	]),
-	content: z.union([z.string(), z.array(z.any())]).optional(),
-	toolCalls: z.array(z.any()).optional(),
-	toolCallId: z.string().optional(),
-	name: z.string().optional(),
-	metadata: z.record(z.any()).optional(),
-});
-
-const AguiV2ToolSchema = z.object({
-	name: z.string(),
-	description: z.string().optional(),
-	parameters: z.any().optional(),
-});
-
 const AguiV2ContextSchema = z.object({
 	description: z.string(),
 	value: z.string(),
@@ -206,8 +187,8 @@ const AguiV2ContextSchema = z.object({
 const AguiV2RequestSchema = z.object({
 	threadId: z.string(),
 	runId: z.string(),
-	messages: z.array(AguiV2MessageSchema).min(1),
-	tools: z.array(AguiV2ToolSchema).default([]),
+	messages: z.array(AguiMessageSchema).min(1),
+	tools: z.array(AguiToolSchema).default([]),
 	context: z.array(AguiV2ContextSchema).default([]),
 	state: z.any().optional(),
 	forwardedProps: z.any().optional(),
@@ -706,8 +687,17 @@ export class AguiMiddlewareApp {
 				return;
 			}
 
-			const { threadId, runId, messages, tools, context } =
+			const { threadId, runId, messages, tools, context, state } =
 				validationResult.data;
+
+			const agui: AguiRunEnvelope = {
+				version: 1,
+				thread_id: threadId,
+				run_id: runId,
+				messages,
+				tools,
+				state,
+			};
 
 			// Use threadId as the session key (V2 threads map to sessions)
 			const sessionId = threadId;
@@ -782,6 +772,7 @@ export class AguiMiddlewareApp {
 				await this.sessionBridge.startAgentRun(sessionId, {
 					runId,
 					messages: agentMessages,
+					agui,
 					tools: wrappedTools,
 					context: runContext,
 					authToken,
@@ -813,6 +804,7 @@ export class AguiMiddlewareApp {
 			await this.sessionBridge.startAgentRun(sessionId, {
 				runId,
 				messages: agentMessages,
+				agui,
 				tools: wrappedTools,
 				context: runContext,
 				authToken,

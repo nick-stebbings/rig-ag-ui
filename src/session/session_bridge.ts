@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { v4 as uuidv4 } from "uuid";
+import type { AguiRunEnvelope } from "../agents/agui_contract";
 import {
 	type AgentConfig,
 	type AgentState,
@@ -291,6 +292,7 @@ export class SessionBridge extends EventEmitter {
 		runInput: {
 			runId?: string;
 			messages?: Message[];
+			agui?: AguiRunEnvelope;
 			tools?: Array<{ type: string; value: unknown }>;
 			context?: Array<{ type: string; value: unknown }>;
 			/** JWT auth token for workflow execution */
@@ -346,6 +348,7 @@ export class SessionBridge extends EventEmitter {
 				runId,
 				threadId: sessionId,
 				messages: runInput.messages || [],
+				agui: runInput.agui,
 				tools,
 				context: runInput.context || [],
 				authToken: runInput.authToken,
@@ -454,11 +457,13 @@ export class SessionBridge extends EventEmitter {
 		session.streamSessions.add(streamSessionId);
 
 		// Listen for stream session closure
-		this.streamHandler.once("session_closed", (data) => {
+		const onClosed = (data: { sessionId: string }) => {
 			if (data.sessionId === streamSessionId) {
 				session.streamSessions.delete(streamSessionId);
+				this.streamHandler.off("session_closed", onClosed);
 			}
-		});
+		};
+		this.streamHandler.on("session_closed", onClosed);
 
 		return true;
 	}
@@ -495,7 +500,7 @@ export class SessionBridge extends EventEmitter {
 
 			// Stop flushing after RUN_FINISHED — remaining buffered events
 			// may belong to a subsequent run and must not go on this stream.
-			if (event.type === "RUN_FINISHED") {
+			if (event.type === "RUN_FINISHED" || event.type === "RUN_ERROR") {
 				const streamSession =
 					this.streamHandler.getSessionInfo(streamSessionId);
 				if (streamSession?.response && !streamSession.response.writableEnded) {
@@ -673,7 +678,7 @@ export class SessionBridge extends EventEmitter {
 		});
 
 		// Close SSE stream after RUN_FINISHED — the run lifecycle is complete
-		if (event.type === "RUN_FINISHED") {
+		if (event.type === "RUN_FINISHED" || event.type === "RUN_ERROR") {
 			for (const streamSessionId of session.streamSessions) {
 				const streamSession =
 					this.streamHandler.getSessionInfo(streamSessionId);
