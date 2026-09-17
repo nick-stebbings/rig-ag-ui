@@ -7,6 +7,7 @@ import axios, {
 } from "axios";
 import { Observable } from "rxjs";
 import { v4 as uuidv4 } from "uuid";
+import { readRigRecoveryError, RigRecoveryError } from "./rig_recovery_error";
 import {
 	CORRELATION_ID_HEADER,
 	REQUEST_ID_HEADER,
@@ -682,7 +683,10 @@ export class RigAbstractAgent extends EventEmitter {
 				threadId: this.threadId,
 				runId,
 				timestamp: Date.now(),
-				data: this.state.errorContext,
+				data: {
+					...this.state.errorContext,
+					...(error instanceof RigRecoveryError ? error.recovery : {}),
+				},
 			};
 			observer.next(errorEvent);
 			subscriber?.error?.(
@@ -1333,6 +1337,8 @@ export class RigAbstractAgent extends EventEmitter {
 				this.completeRun(runId, observer, subscriber);
 			});
 		} catch (error) {
+			const recovery = await readRigRecoveryError(error);
+			if (recovery) throw recovery;
 			throw new Error(
 				`Failed to process message with Rig API: ${error instanceof Error ? error.message : error}`,
 			);

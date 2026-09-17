@@ -150,6 +150,52 @@ describe("CopilotKit frontend tool continuation through HTTP middleware", () => 
 		}
 	});
 
+	it.each([false, true])(
+		"shows a safe recovery action (deferred: %s)",
+		async (deferred) => {
+			reply = (_request, res) =>
+				res.status(409).json({
+					code: "FRONTEND_TOOL_PENDING",
+					tool_call_id: "pending-call",
+					next_action: "complete_or_cancel_pending_action",
+					error: "private upstream details must not be forwarded",
+				});
+			const headers = {
+				"Content-Type": "application/json",
+				"X-API-Key": "development-key",
+				...(deferred ? { "X-Stream-Mode": "deferred" } : {}),
+			};
+			let response = await fetch(url, {
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					threadId: randomUUID(),
+					runId: randomUUID(),
+					messages: [{ id: "user", role: "user", content: "Continue" }],
+				}),
+			});
+			if (deferred) {
+				const { streamSessionId } = await response.json();
+				response = await fetch(
+					url.replace(/\/run$/, `/events/${streamSessionId}`),
+					{ headers },
+				);
+			}
+			const body = await response.text();
+			expect(body).toContain('"type":"RUN_ERROR"');
+			expect(body).toContain('"code":"FRONTEND_TOOL_PENDING"');
+			expect(body).toContain('"tool_call_id":"pending-call"');
+			expect(body).toContain(
+				'"next_action":"complete_or_cancel_pending_action"',
+			);
+			expect(body).toContain(
+				"Finish or cancel the pending setup action before sending another message.",
+			);
+			expect(body).not.toContain("private upstream details");
+			expect(body).not.toContain('"type":"RUN_FINISHED"');
+		},
+	);
+
 	it("keeps normal chat and server tool results", async () => {
 		reply = (_request, res) =>
 			res
