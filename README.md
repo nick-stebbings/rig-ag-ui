@@ -73,6 +73,7 @@ All variables are read at startup. Copy `.env.example` as a starting point.
 | `RIG_API_BASE_URL` | `http://localhost:8080` | Base URL of the Rig backend host |
 | `RIG_API_PATH` | `/internal/rig` | Optional shared path prefix prepended before `/sessions` endpoints |
 | `AGUI_API_KEY` | `development-key` | API key clients must send in the `x-api-key` header |
+| `AG_UI_TOOL_CALL_MARKER_PREFIX` | `__AGUI_TOOL_CALL__:` | Prefix for a structured backend tool-call marker. The JSON payload must contain `id`, `name`, and `arguments`. |
 | `AGENT_REGISTRY` | *(unset)* | Static JSON object mapping agent IDs to metadata; returned by `/copilotkit/info` |
 | `AGENT_DISCOVERY_URL` | *(unset)* | Optional discovery endpoint the middleware queries for agent metadata |
 | `AGENT_DISCOVERY_HEADERS` | *(unset)* | Optional JSON object of HTTP headers used for `AGENT_DISCOVERY_URL` requests |

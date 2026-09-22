@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-	isUuid,
-	parseFrontendToolCallMarker,
-	parseStructuredToolCallMarker,
-	parseToolResultMarker,
-} from "./rig_abstract_agent";
+import { isUuid, parseToolResultMarker } from "./rig_abstract_agent";
 
 describe("parseToolResultMarker", () => {
 	it("parses a well-formed __TOOL_RESULT__ marker into its parts", () => {
@@ -54,54 +49,5 @@ describe("isUuid", () => {
 		expect(isUuid("")).toBe(false);
 		expect(isUuid(undefined)).toBe(false);
 		expect(isUuid("083f404e41bb54a1a464a226df4ce807")).toBe(false);
-	});
-});
-
-describe("parseFrontendToolCallMarker", () => {
-	it("keeps the server-generated call id for the Native tool result", () => {
-		const marker = `__FRONTEND_TOOL_CALL__:${JSON.stringify({
-			id: "server-call-123",
-			name: "collect_generation_inputs",
-			arguments: { action: "save-answer", fieldKey: "website" },
-		})}`;
-
-		expect(parseFrontendToolCallMarker(marker)).toEqual({
-			id: "server-call-123",
-			name: "collect_generation_inputs",
-			arguments: {
-				action: "save-answer",
-				fieldKey: "website",
-			},
-		});
-	});
-
-	it("rejects a malformed durable marker", () => {
-		expect(
-			parseFrontendToolCallMarker("__FRONTEND_TOOL_CALL__:{bad"),
-		).toBeNull();
-	});
-});
-
-describe("parseStructuredToolCallMarker", () => {
-	it("parses the neutral open-source marker format", () => {
-		const marker = `__AGUI_TOOL_CALL__:${JSON.stringify({
-			id: "provider-call-456",
-			name: "collect_input",
-			arguments: { field: "website" },
-		})}`;
-
-		expect(parseStructuredToolCallMarker(marker)).toEqual({
-			id: "provider-call-456",
-			name: "collect_input",
-			arguments: { field: "website" },
-		});
-	});
-
-	it("requires an upstream call id", () => {
-		expect(
-			parseStructuredToolCallMarker(
-				'__AGUI_TOOL_CALL__:{"name":"collect_input","arguments":{}}',
-			),
-		).toBeNull();
 	});
 });

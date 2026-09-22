@@ -7,7 +7,6 @@ import axios, {
 } from "axios";
 import { Observable } from "rxjs";
 import { v4 as uuidv4 } from "uuid";
-import { readRigRecoveryError, RigRecoveryError } from "./rig_recovery_error";
 import {
 	CORRELATION_ID_HEADER,
 	REQUEST_ID_HEADER,
@@ -15,9 +14,10 @@ import {
 } from "../middleware/tracing";
 import {
 	type AguiRunEnvelope,
-	FRONTEND_TOOL_MARKER,
-	parseFrontendToolCall,
+	STRUCTURED_TOOL_MARKER,
+	parseStructuredToolCall,
 } from "./agui_contract";
+import { RigRecoveryError, readRigRecoveryError } from "./rig_recovery_error";
 
 const UUID_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -77,25 +77,7 @@ export interface RigAgentAppConfig {
 	durableSessionInitializer?: (
 		authToken: string | undefined,
 	) => Promise<Record<string, unknown>>;
-	/**
-	 * Parse a product-specific structured tool-call marker.
-	 *
-	 * Return `null` when the content is not a tool-call marker. The parser must
-	 * preserve the producer's call ID. That ID is used when the client returns
-	 * the tool result.
-	 */
-	toolCallMarkerParser?: ToolCallMarkerParser;
 }
-
-/** A structured tool call that can be emitted as standard AG-UI events. */
-export interface ToolCallEnvelope {
-	id: string;
-	name: string;
-	arguments: unknown;
-}
-
-/** Parse a product-specific stream marker into a structured tool call. */
-export type ToolCallMarkerParser = (content: string) => ToolCallEnvelope | null;
 
 /**
  * Event type identifiers for the AG-UI protocol.
@@ -291,56 +273,6 @@ export function parseToolResultMarker(
 	}
 
 	return { internalCallId, resultJson };
-}
-
-/**
- * Parse a durable Native-tool marker from Rig.
- *
- * Rig saves the call before it emits this marker. The `id` is therefore the
- * identity that Native must return with its tool result. Do not replace it
- * with a run-local value.
- */
-export function parseStructuredToolCallMarker(
-	content: string,
-	prefix = "__AGUI_TOOL_CALL__:",
-): ToolCallEnvelope | null {
-	if (!content.startsWith(prefix)) {
-		return null;
-	}
-
-	try {
-		const value: unknown = JSON.parse(content.substring(prefix.length));
-		if (
-			typeof value !== "object" ||
-			value === null ||
-			typeof (value as Record<string, unknown>).id !== "string" ||
-			typeof (value as Record<string, unknown>).name !== "string" ||
-			!("arguments" in value)
-		) {
-			return null;
-		}
-
-		const marker = value as {
-			id: string;
-			name: string;
-			arguments: unknown;
-		};
-		return marker;
-	} catch {
-		return null;
-	}
-}
-
-/**
- * Compatibility adapter for Agentiff's existing server marker.
- *
- * New integrations should emit the neutral `__AGUI_TOOL_CALL__:` marker or
- * provide `toolCallMarkerParser` in `RigAgentAppConfig`.
- */
-export function parseFrontendToolCallMarker(
-	content: string,
-): ToolCallEnvelope | null {
-	return parseStructuredToolCallMarker(content, "__FRONTEND_TOOL_CALL__:");
 }
 
 export class RigAbstractAgent extends EventEmitter {
@@ -593,7 +525,6 @@ export class RigAbstractAgent extends EventEmitter {
 			authToken,
 			agui,
 		} = input;
-
 		try {
 			this.currentAuthToken = authToken;
 			this.currentSessionMetadata = await this.getSessionMetadata(authToken);
@@ -880,50 +811,54 @@ export class RigAbstractAgent extends EventEmitter {
 								eventData.content ??
 								eventData.chunk?.content ??
 								eventData.data?.chunk?.content;
-							if (
-								typeof marker === "string" &&
-								marker.startsWith(FRONTEND_TOOL_MARKER)
-							) {
-								const call = parseFrontendToolCall(marker, agui?.tools ?? []);
-								const signature = JSON.stringify(call);
-								const previous = frontendCalls.get(call.id);
-								if (previous && previous !== signature)
-									throw new Error(
-										"Rig reused a frontend call ID with different arguments",
-									);
-								if (!previous) {
-									frontendCalls.set(call.id, signature);
-									for (const event of [
-										{
-											type: EventType.TOOL_CALL_START,
-											data: {
-												toolCallId: call.id,
-												toolCallName: call.name,
-												parentMessageId: messageId,
+							if (typeof marker === "string") {
+								const call = parseStructuredToolCall(
+									marker,
+									agui?.tools ?? [],
+									process.env.AG_UI_TOOL_CALL_MARKER_PREFIX?.trim() ||
+										STRUCTURED_TOOL_MARKER,
+								);
+								if (call) {
+									const signature = JSON.stringify(call);
+									const previous = frontendCalls.get(call.id);
+									if (previous && previous !== signature)
+										throw new Error(
+											"Rig reused a frontend call ID with different arguments",
+										);
+									if (!previous) {
+										frontendCalls.set(call.id, signature);
+										for (const event of [
+											{
+												type: EventType.TOOL_CALL_START,
+												data: {
+													toolCallId: call.id,
+													toolCallName: call.name,
+													parentMessageId: messageId,
+												},
 											},
-										},
-										{
-											type: EventType.TOOL_CALL_ARGS,
-											data: {
-												toolCallId: call.id,
-												delta: JSON.stringify(call.arguments),
+											{
+												type: EventType.TOOL_CALL_ARGS,
+												data: {
+													toolCallId: call.id,
+													delta: JSON.stringify(call.arguments),
+												},
 											},
-										},
-										{
-											type: EventType.TOOL_CALL_END,
-											data: { toolCallId: call.id },
-										},
-									]) {
-										const output: BaseEvent = {
-											...event,
-											threadId: this.threadId,
-											runId,
-										};
-										observer.next(output);
-										subscriber?.next?.(output);
+											{
+												type: EventType.TOOL_CALL_END,
+												data: { toolCallId: call.id },
+											},
+										]) {
+											const output: BaseEvent = {
+												...event,
+												threadId: this.threadId,
+												runId,
+											};
+											observer.next(output);
+											subscriber?.next?.(output);
+										}
 									}
+									continue;
 								}
-								continue;
 							}
 
 							// Handle actual Rig API format: {"content": "...", "sequence": N, "is_final": bool}
@@ -934,7 +869,6 @@ export class RigAbstractAgent extends EventEmitter {
 								const contentPrefix = content.substring(0, 30);
 								if (
 									content.startsWith("__TOOL_CALL__") ||
-									content.startsWith("__FRONTEND_TOOL_CALL__") ||
 									content.startsWith("__STATE_UPDATE__") ||
 									content.startsWith("__TOOL_RESULT__")
 								) {
@@ -943,53 +877,22 @@ export class RigAbstractAgent extends EventEmitter {
 									);
 								}
 
-								// A structured tool call has a durable producer identity. The
-								// client must return its result with this exact ID.
-								const structuredToolCall =
-									this.appConfig.toolCallMarkerParser?.(content) ??
-									parseStructuredToolCallMarker(content) ??
-									parseFrontendToolCallMarker(content);
-
-								// Feature 031: Check for tool call marker
-								if (
-									structuredToolCall ||
-									content.startsWith("__TOOL_CALL__:")
-								) {
+								// Legacy marker support. New integrations use the structured
+								// marker handled before this branch.
+								if (content.startsWith("__TOOL_CALL__:")) {
 									console.log(
 										`[RigAgent] Processing tool call: ${content.substring(0, 100)}`,
 									);
-									const legacyToolCallData = content.substring(
+									const toolCallData = content.substring(
 										"__TOOL_CALL__:".length,
 									);
-									const legacyFirstColonIndex = legacyToolCallData.indexOf(":");
-									const legacyToolCall =
-										!structuredToolCall && legacyFirstColonIndex > 0
-											? {
-													toolCallId: `${legacyToolCallData.substring(0, legacyFirstColonIndex)}-${runId}`,
-													toolCallName: legacyToolCallData.substring(
-														0,
-														legacyFirstColonIndex,
-													),
-													toolCallArgs: legacyToolCallData.substring(
-														legacyFirstColonIndex + 1,
-													),
-												}
-											: null;
-									const toolCall = structuredToolCall
-										? {
-												toolCallId: structuredToolCall.id,
-												toolCallName: structuredToolCall.name,
-												toolCallArgs: JSON.stringify(
-													structuredToolCall.arguments,
-												),
-											}
-										: legacyToolCall;
-									if (toolCall) {
-										const {
-											toolCallId,
-											toolCallName: toolName,
-											toolCallArgs: toolArgsJson,
-										} = toolCall;
+									const firstColonIndex = toolCallData.indexOf(":");
+									if (firstColonIndex > 0) {
+										const toolName = toolCallData.substring(0, firstColonIndex);
+										const toolArgsJson = toolCallData.substring(
+											firstColonIndex + 1,
+										);
+										const toolCallId = `${toolName}-${runId}`;
 
 										try {
 											// Parse to validate JSON format (throws if invalid)
@@ -1042,27 +945,24 @@ export class RigAbstractAgent extends EventEmitter {
 											observer.next(toolEndEvent);
 											subscriber?.next?.(toolEndEvent);
 
-											// The legacy marker does not have a durable server ID. Keep its
-											// text fallback for old flows only. Native markers must use the
-											// standard AG-UI events above, or their result cannot be matched.
-											if (!structuredToolCall) {
-												const textMarker = `<!--TOOL_CALL:${toolName}:${toolArgsJson}-->`;
-												accumulatedContent += textMarker;
+											// The legacy marker does not have a durable producer ID. Keep
+											// its text fallback for compatibility.
+											const textMarker = `<!--TOOL_CALL:${toolName}:${toolArgsJson}-->`;
+											accumulatedContent += textMarker;
 
-												const markerEvent: BaseEvent = {
-													type: EventType.TEXT_MESSAGE_CONTENT,
-													threadId: this.threadId,
-													runId,
-													messageId,
-													timestamp: Date.now(),
-													data: {
-														delta: textMarker,
-														accumulated: accumulatedContent,
-													},
-												};
-												observer.next(markerEvent);
-												subscriber?.next?.(markerEvent);
-											}
+											const markerEvent: BaseEvent = {
+												type: EventType.TEXT_MESSAGE_CONTENT,
+												threadId: this.threadId,
+												runId,
+												messageId,
+												timestamp: Date.now(),
+												data: {
+													delta: textMarker,
+													accumulated: accumulatedContent,
+												},
+											};
+											observer.next(markerEvent);
+											subscriber?.next?.(markerEvent);
 
 											console.log(
 												`[RigAgent] Tool call processed: ${toolName} (call_id=${toolCallId})`,
