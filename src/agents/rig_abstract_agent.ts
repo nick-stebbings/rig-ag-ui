@@ -77,7 +77,25 @@ export interface RigAgentAppConfig {
 	durableSessionInitializer?: (
 		authToken: string | undefined,
 	) => Promise<Record<string, unknown>>;
+	/**
+	 * Parse a product-specific structured tool-call marker.
+	 *
+	 * Return `null` when the content is not a tool-call marker. The parser must
+	 * preserve the producer's call ID. That ID is used when the client returns
+	 * the tool result.
+	 */
+	toolCallMarkerParser?: ToolCallMarkerParser;
 }
+
+/** A structured tool call that can be emitted as standard AG-UI events. */
+export interface ToolCallEnvelope {
+	id: string;
+	name: string;
+	arguments: unknown;
+}
+
+/** Parse a product-specific stream marker into a structured tool call. */
+export type ToolCallMarkerParser = (content: string) => ToolCallEnvelope | null;
 
 /**
  * Event type identifiers for the AG-UI protocol.
@@ -282,10 +300,10 @@ export function parseToolResultMarker(
  * identity that Native must return with its tool result. Do not replace it
  * with a run-local value.
  */
-export function parseFrontendToolCallMarker(
+export function parseStructuredToolCallMarker(
 	content: string,
-): { toolCallId: string; toolCallName: string; toolCallArgs: string } | null {
-	const prefix = "__FRONTEND_TOOL_CALL__:";
+	prefix = "__AGUI_TOOL_CALL__:",
+): ToolCallEnvelope | null {
 	if (!content.startsWith(prefix)) {
 		return null;
 	}
@@ -307,14 +325,22 @@ export function parseFrontendToolCallMarker(
 			name: string;
 			arguments: unknown;
 		};
-		return {
-			toolCallId: marker.id,
-			toolCallName: marker.name,
-			toolCallArgs: JSON.stringify(marker.arguments),
-		};
+		return marker;
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * Compatibility adapter for Agentiff's existing server marker.
+ *
+ * New integrations should emit the neutral `__AGUI_TOOL_CALL__:` marker or
+ * provide `toolCallMarkerParser` in `RigAgentAppConfig`.
+ */
+export function parseFrontendToolCallMarker(
+	content: string,
+): ToolCallEnvelope | null {
+	return parseStructuredToolCallMarker(content, "__FRONTEND_TOOL_CALL__:");
 }
 
 export class RigAbstractAgent extends EventEmitter {
@@ -917,12 +943,18 @@ export class RigAbstractAgent extends EventEmitter {
 									);
 								}
 
-								// A Native tool call has a durable server identity. Native must
-								// return its result with this exact ID.
-								const frontendToolCall = parseFrontendToolCallMarker(content);
+								// A structured tool call has a durable producer identity. The
+								// client must return its result with this exact ID.
+								const structuredToolCall =
+									this.appConfig.toolCallMarkerParser?.(content) ??
+									parseStructuredToolCallMarker(content) ??
+									parseFrontendToolCallMarker(content);
 
 								// Feature 031: Check for tool call marker
-								if (frontendToolCall || content.startsWith("__TOOL_CALL__:")) {
+								if (
+									structuredToolCall ||
+									content.startsWith("__TOOL_CALL__:")
+								) {
 									console.log(
 										`[RigAgent] Processing tool call: ${content.substring(0, 100)}`,
 									);
@@ -931,7 +963,7 @@ export class RigAbstractAgent extends EventEmitter {
 									);
 									const legacyFirstColonIndex = legacyToolCallData.indexOf(":");
 									const legacyToolCall =
-										!frontendToolCall && legacyFirstColonIndex > 0
+										!structuredToolCall && legacyFirstColonIndex > 0
 											? {
 													toolCallId: `${legacyToolCallData.substring(0, legacyFirstColonIndex)}-${runId}`,
 													toolCallName: legacyToolCallData.substring(
@@ -943,7 +975,15 @@ export class RigAbstractAgent extends EventEmitter {
 													),
 												}
 											: null;
-									const toolCall = frontendToolCall ?? legacyToolCall;
+									const toolCall = structuredToolCall
+										? {
+												toolCallId: structuredToolCall.id,
+												toolCallName: structuredToolCall.name,
+												toolCallArgs: JSON.stringify(
+													structuredToolCall.arguments,
+												),
+											}
+										: legacyToolCall;
 									if (toolCall) {
 										const {
 											toolCallId,
@@ -1005,7 +1045,7 @@ export class RigAbstractAgent extends EventEmitter {
 											// The legacy marker does not have a durable server ID. Keep its
 											// text fallback for old flows only. Native markers must use the
 											// standard AG-UI events above, or their result cannot be matched.
-											if (!frontendToolCall) {
+											if (!structuredToolCall) {
 												const textMarker = `<!--TOOL_CALL:${toolName}:${toolArgsJson}-->`;
 												accumulatedContent += textMarker;
 

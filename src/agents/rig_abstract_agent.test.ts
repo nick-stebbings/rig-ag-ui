@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	isUuid,
 	parseFrontendToolCallMarker,
+	parseStructuredToolCallMarker,
 	parseToolResultMarker,
 } from "./rig_abstract_agent";
 
@@ -65,18 +66,42 @@ describe("parseFrontendToolCallMarker", () => {
 		})}`;
 
 		expect(parseFrontendToolCallMarker(marker)).toEqual({
-			toolCallId: "server-call-123",
-			toolCallName: "collect_generation_inputs",
-			toolCallArgs: JSON.stringify({
+			id: "server-call-123",
+			name: "collect_generation_inputs",
+			arguments: {
 				action: "save-answer",
 				fieldKey: "website",
-			}),
+			},
 		});
 	});
 
 	it("rejects a malformed durable marker", () => {
 		expect(
 			parseFrontendToolCallMarker("__FRONTEND_TOOL_CALL__:{bad"),
+		).toBeNull();
+	});
+});
+
+describe("parseStructuredToolCallMarker", () => {
+	it("parses the neutral open-source marker format", () => {
+		const marker = `__AGUI_TOOL_CALL__:${JSON.stringify({
+			id: "provider-call-456",
+			name: "collect_input",
+			arguments: { field: "website" },
+		})}`;
+
+		expect(parseStructuredToolCallMarker(marker)).toEqual({
+			id: "provider-call-456",
+			name: "collect_input",
+			arguments: { field: "website" },
+		});
+	});
+
+	it("requires an upstream call id", () => {
+		expect(
+			parseStructuredToolCallMarker(
+				'__AGUI_TOOL_CALL__:{"name":"collect_input","arguments":{}}',
+			),
 		).toBeNull();
 	});
 });
