@@ -275,6 +275,48 @@ export function parseToolResultMarker(
 	return { internalCallId, resultJson };
 }
 
+/**
+ * Parse a durable Native-tool marker from Rig.
+ *
+ * Rig saves the call before it emits this marker. The `id` is therefore the
+ * identity that Native must return with its tool result. Do not replace it
+ * with a run-local value.
+ */
+export function parseFrontendToolCallMarker(
+	content: string,
+): { toolCallId: string; toolCallName: string; toolCallArgs: string } | null {
+	const prefix = "__FRONTEND_TOOL_CALL__:";
+	if (!content.startsWith(prefix)) {
+		return null;
+	}
+
+	try {
+		const value: unknown = JSON.parse(content.substring(prefix.length));
+		if (
+			typeof value !== "object" ||
+			value === null ||
+			typeof (value as Record<string, unknown>).id !== "string" ||
+			typeof (value as Record<string, unknown>).name !== "string" ||
+			!("arguments" in value)
+		) {
+			return null;
+		}
+
+		const marker = value as {
+			id: string;
+			name: string;
+			arguments: unknown;
+		};
+		return {
+			toolCallId: marker.id,
+			toolCallName: marker.name,
+			toolCallArgs: JSON.stringify(marker.arguments),
+		};
+	} catch {
+		return null;
+	}
+}
+
 export class RigAbstractAgent extends EventEmitter {
 	public agentId: string;
 
@@ -866,6 +908,7 @@ export class RigAbstractAgent extends EventEmitter {
 								const contentPrefix = content.substring(0, 30);
 								if (
 									content.startsWith("__TOOL_CALL__") ||
+									content.startsWith("__FRONTEND_TOOL_CALL__") ||
 									content.startsWith("__STATE_UPDATE__") ||
 									content.startsWith("__TOOL_RESULT__")
 								) {
@@ -874,22 +917,39 @@ export class RigAbstractAgent extends EventEmitter {
 									);
 								}
 
+								// A Native tool call has a durable server identity. Native must
+								// return its result with this exact ID.
+								const frontendToolCall = parseFrontendToolCallMarker(content);
+
 								// Feature 031: Check for tool call marker
-								if (content.startsWith("__TOOL_CALL__:")) {
+								if (frontendToolCall || content.startsWith("__TOOL_CALL__:")) {
 									console.log(
 										`[RigAgent] Processing tool call: ${content.substring(0, 100)}`,
 									);
-									// Parse tool call: __TOOL_CALL__:name:args
-									const toolCallData = content.substring(
+									const legacyToolCallData = content.substring(
 										"__TOOL_CALL__:".length,
 									);
-									const firstColonIndex = toolCallData.indexOf(":");
-									if (firstColonIndex > 0) {
-										const toolName = toolCallData.substring(0, firstColonIndex);
-										const toolArgsJson = toolCallData.substring(
-											firstColonIndex + 1,
-										);
-										const toolCallId = `${toolName}-${runId}`;
+									const legacyFirstColonIndex = legacyToolCallData.indexOf(":");
+									const legacyToolCall =
+										!frontendToolCall && legacyFirstColonIndex > 0
+											? {
+													toolCallId: `${legacyToolCallData.substring(0, legacyFirstColonIndex)}-${runId}`,
+													toolCallName: legacyToolCallData.substring(
+														0,
+														legacyFirstColonIndex,
+													),
+													toolCallArgs: legacyToolCallData.substring(
+														legacyFirstColonIndex + 1,
+													),
+												}
+											: null;
+									const toolCall = frontendToolCall ?? legacyToolCall;
+									if (toolCall) {
+										const {
+											toolCallId,
+											toolCallName: toolName,
+											toolCallArgs: toolArgsJson,
+										} = toolCall;
 
 										try {
 											// Parse to validate JSON format (throws if invalid)
@@ -942,30 +1002,30 @@ export class RigAbstractAgent extends EventEmitter {
 											observer.next(toolEndEvent);
 											subscriber?.next?.(toolEndEvent);
 
-											// Also emit as text marker for frontend detection.
-											// CopilotKit's multipart format replaces data on each chunk,
-											// so ActionExecutionMessageOutput gets overwritten by the next
-											// text chunk. The hook useCopilotToolCallSync detects these
-											// markers in TextMessage content as the reliable execution path.
-											const textMarker = `<!--TOOL_CALL:${toolName}:${toolArgsJson}-->`;
-											accumulatedContent += textMarker;
+											// The legacy marker does not have a durable server ID. Keep its
+											// text fallback for old flows only. Native markers must use the
+											// standard AG-UI events above, or their result cannot be matched.
+											if (!frontendToolCall) {
+												const textMarker = `<!--TOOL_CALL:${toolName}:${toolArgsJson}-->`;
+												accumulatedContent += textMarker;
 
-											const markerEvent: BaseEvent = {
-												type: EventType.TEXT_MESSAGE_CONTENT,
-												threadId: this.threadId,
-												runId,
-												messageId,
-												timestamp: Date.now(),
-												data: {
-													delta: textMarker,
-													accumulated: accumulatedContent,
-												},
-											};
-											observer.next(markerEvent);
-											subscriber?.next?.(markerEvent);
+												const markerEvent: BaseEvent = {
+													type: EventType.TEXT_MESSAGE_CONTENT,
+													threadId: this.threadId,
+													runId,
+													messageId,
+													timestamp: Date.now(),
+													data: {
+														delta: textMarker,
+														accumulated: accumulatedContent,
+													},
+												};
+												observer.next(markerEvent);
+												subscriber?.next?.(markerEvent);
+											}
 
 											console.log(
-												`[RigAgent] Tool call processed: ${toolName} (TOOL_CALL events + text marker emitted)`,
+												`[RigAgent] Tool call processed: ${toolName} (call_id=${toolCallId})`,
 											);
 										} catch (parseError) {
 											console.error(

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isUuid, parseToolResultMarker } from "./rig_abstract_agent";
+import {
+	isUuid,
+	parseFrontendToolCallMarker,
+	parseToolResultMarker,
+} from "./rig_abstract_agent";
 
 describe("parseToolResultMarker", () => {
 	it("parses a well-formed __TOOL_RESULT__ marker into its parts", () => {
@@ -35,7 +39,6 @@ describe("parseToolResultMarker", () => {
 		expect(parseToolResultMarker(marker)).toBeNull();
 	});
 });
-
 describe("isUuid", () => {
 	it("accepts a canonical lowercase UUID (client crypto.randomUUID form)", () => {
 		expect(isUuid("083f404e-41bb-54a1-a464-a226df4ce807")).toBe(true);
@@ -50,5 +53,30 @@ describe("isUuid", () => {
 		expect(isUuid("")).toBe(false);
 		expect(isUuid(undefined)).toBe(false);
 		expect(isUuid("083f404e41bb54a1a464a226df4ce807")).toBe(false);
+	});
+});
+
+describe("parseFrontendToolCallMarker", () => {
+	it("keeps the server-generated call id for the Native tool result", () => {
+		const marker = `__FRONTEND_TOOL_CALL__:${JSON.stringify({
+			id: "server-call-123",
+			name: "collect_generation_inputs",
+			arguments: { action: "save-answer", fieldKey: "website" },
+		})}`;
+
+		expect(parseFrontendToolCallMarker(marker)).toEqual({
+			toolCallId: "server-call-123",
+			toolCallName: "collect_generation_inputs",
+			toolCallArgs: JSON.stringify({
+				action: "save-answer",
+				fieldKey: "website",
+			}),
+		});
+	});
+
+	it("rejects a malformed durable marker", () => {
+		expect(
+			parseFrontendToolCallMarker("__FRONTEND_TOOL_CALL__:{bad"),
+		).toBeNull();
 	});
 });
