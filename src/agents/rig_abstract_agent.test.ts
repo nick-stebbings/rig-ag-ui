@@ -35,7 +35,6 @@ describe("parseToolResultMarker", () => {
 		expect(parseToolResultMarker(marker)).toBeNull();
 	});
 });
-
 describe("isUuid", () => {
 	it("accepts a canonical lowercase UUID (client crypto.randomUUID form)", () => {
 		expect(isUuid("083f404e-41bb-54a1-a464-a226df4ce807")).toBe(true);

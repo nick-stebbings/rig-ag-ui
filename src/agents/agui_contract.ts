@@ -53,25 +53,35 @@ export interface AguiRunEnvelope {
 	state?: unknown;
 }
 
-const FrontendCallSchema = z.object({
+const StructuredToolCallSchema = z.object({
 	id: z.string().min(1),
 	name: z.string().min(1),
 	arguments: z.record(z.unknown()),
 });
 
-export const FRONTEND_TOOL_MARKER = "__FRONTEND_TOOL_CALL__:";
+export type StructuredToolCall = z.infer<typeof StructuredToolCallSchema>;
 
-/** Preserve the server call ID. Never make a tool result in middleware. */
-export function parseFrontendToolCall(
+/** Neutral marker for any backend that streams a client-owned tool call. */
+export const STRUCTURED_TOOL_MARKER = "__AGUI_TOOL_CALL__:";
+
+/**
+ * Parse a structured client-owned tool call.
+ *
+ * The producer creates the call ID. Middleware only transports it. The tool
+ * must be advertised for the current run before middleware emits it.
+ */
+export function parseStructuredToolCall(
 	content: string,
 	tools: AguiRunEnvelope["tools"],
-) {
-	const call = FrontendCallSchema.parse(
-		JSON.parse(content.slice(FRONTEND_TOOL_MARKER.length)),
+	prefix = STRUCTURED_TOOL_MARKER,
+): StructuredToolCall | null {
+	if (!content.startsWith(prefix)) return null;
+	const call = StructuredToolCallSchema.parse(
+		JSON.parse(content.slice(prefix.length)),
 	);
 	if (!tools.some((tool) => tool.name === call.name)) {
 		throw new Error(
-			"Rig requested a frontend tool that this run did not advertise",
+			"Backend requested a client tool that this run did not advertise",
 		);
 	}
 	return call;

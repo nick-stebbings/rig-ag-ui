@@ -7,7 +7,6 @@ import axios, {
 } from "axios";
 import { Observable } from "rxjs";
 import { v4 as uuidv4 } from "uuid";
-import { readRigRecoveryError, RigRecoveryError } from "./rig_recovery_error";
 import {
 	CORRELATION_ID_HEADER,
 	REQUEST_ID_HEADER,
@@ -15,9 +14,10 @@ import {
 } from "../middleware/tracing";
 import {
 	type AguiRunEnvelope,
-	FRONTEND_TOOL_MARKER,
-	parseFrontendToolCall,
+	STRUCTURED_TOOL_MARKER,
+	parseStructuredToolCall,
 } from "./agui_contract";
+import { RigRecoveryError, readRigRecoveryError } from "./rig_recovery_error";
 
 const UUID_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -525,7 +525,6 @@ export class RigAbstractAgent extends EventEmitter {
 			authToken,
 			agui,
 		} = input;
-
 		try {
 			this.currentAuthToken = authToken;
 			this.currentSessionMetadata = await this.getSessionMetadata(authToken);
@@ -812,50 +811,54 @@ export class RigAbstractAgent extends EventEmitter {
 								eventData.content ??
 								eventData.chunk?.content ??
 								eventData.data?.chunk?.content;
-							if (
-								typeof marker === "string" &&
-								marker.startsWith(FRONTEND_TOOL_MARKER)
-							) {
-								const call = parseFrontendToolCall(marker, agui?.tools ?? []);
-								const signature = JSON.stringify(call);
-								const previous = frontendCalls.get(call.id);
-								if (previous && previous !== signature)
-									throw new Error(
-										"Rig reused a frontend call ID with different arguments",
-									);
-								if (!previous) {
-									frontendCalls.set(call.id, signature);
-									for (const event of [
-										{
-											type: EventType.TOOL_CALL_START,
-											data: {
-												toolCallId: call.id,
-												toolCallName: call.name,
-												parentMessageId: messageId,
+							if (typeof marker === "string") {
+								const call = parseStructuredToolCall(
+									marker,
+									agui?.tools ?? [],
+									process.env.AG_UI_TOOL_CALL_MARKER_PREFIX?.trim() ||
+										STRUCTURED_TOOL_MARKER,
+								);
+								if (call) {
+									const signature = JSON.stringify(call);
+									const previous = frontendCalls.get(call.id);
+									if (previous && previous !== signature)
+										throw new Error(
+											"Rig reused a frontend call ID with different arguments",
+										);
+									if (!previous) {
+										frontendCalls.set(call.id, signature);
+										for (const event of [
+											{
+												type: EventType.TOOL_CALL_START,
+												data: {
+													toolCallId: call.id,
+													toolCallName: call.name,
+													parentMessageId: messageId,
+												},
 											},
-										},
-										{
-											type: EventType.TOOL_CALL_ARGS,
-											data: {
-												toolCallId: call.id,
-												delta: JSON.stringify(call.arguments),
+											{
+												type: EventType.TOOL_CALL_ARGS,
+												data: {
+													toolCallId: call.id,
+													delta: JSON.stringify(call.arguments),
+												},
 											},
-										},
-										{
-											type: EventType.TOOL_CALL_END,
-											data: { toolCallId: call.id },
-										},
-									]) {
-										const output: BaseEvent = {
-											...event,
-											threadId: this.threadId,
-											runId,
-										};
-										observer.next(output);
-										subscriber?.next?.(output);
+											{
+												type: EventType.TOOL_CALL_END,
+												data: { toolCallId: call.id },
+											},
+										]) {
+											const output: BaseEvent = {
+												...event,
+												threadId: this.threadId,
+												runId,
+											};
+											observer.next(output);
+											subscriber?.next?.(output);
+										}
 									}
+									continue;
 								}
-								continue;
 							}
 
 							// Handle actual Rig API format: {"content": "...", "sequence": N, "is_final": bool}
@@ -874,12 +877,12 @@ export class RigAbstractAgent extends EventEmitter {
 									);
 								}
 
-								// Feature 031: Check for tool call marker
+								// Legacy marker support. New integrations use the structured
+								// marker handled before this branch.
 								if (content.startsWith("__TOOL_CALL__:")) {
 									console.log(
 										`[RigAgent] Processing tool call: ${content.substring(0, 100)}`,
 									);
-									// Parse tool call: __TOOL_CALL__:name:args
 									const toolCallData = content.substring(
 										"__TOOL_CALL__:".length,
 									);
@@ -942,11 +945,8 @@ export class RigAbstractAgent extends EventEmitter {
 											observer.next(toolEndEvent);
 											subscriber?.next?.(toolEndEvent);
 
-											// Also emit as text marker for frontend detection.
-											// CopilotKit's multipart format replaces data on each chunk,
-											// so ActionExecutionMessageOutput gets overwritten by the next
-											// text chunk. The hook useCopilotToolCallSync detects these
-											// markers in TextMessage content as the reliable execution path.
+											// The legacy marker does not have a durable producer ID. Keep
+											// its text fallback for compatibility.
 											const textMarker = `<!--TOOL_CALL:${toolName}:${toolArgsJson}-->`;
 											accumulatedContent += textMarker;
 
@@ -965,7 +965,7 @@ export class RigAbstractAgent extends EventEmitter {
 											subscriber?.next?.(markerEvent);
 
 											console.log(
-												`[RigAgent] Tool call processed: ${toolName} (TOOL_CALL events + text marker emitted)`,
+												`[RigAgent] Tool call processed: ${toolName} (call_id=${toolCallId})`,
 											);
 										} catch (parseError) {
 											console.error(
