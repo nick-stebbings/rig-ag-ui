@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { AguiRunEnvelope } from "../../src/agents/agui_contract";
 import { AguiMiddlewareApp } from "../../src/app";
+import transportContract from "../fixtures/frontend-tool-transport.json";
 
 type RigRequest = {
 	content: string;
@@ -61,6 +62,7 @@ describe("CopilotKit frontend tool continuation through HTTP middleware", () => 
 		const backend = await listen(rig);
 		servers.push(backend.server);
 		vi.stubEnv("RIG_API_BASE_URL", backend.url);
+		vi.stubEnv("AG_UI_TOOL_CALL_MARKER_PREFIX", "");
 		middleware = new AguiMiddlewareApp();
 		const bridge = await listen(middleware.getApp());
 		servers.push(bridge.server);
@@ -241,21 +243,29 @@ describe("CopilotKit frontend tool continuation through HTTP middleware", () => 
 		expect(requests).toHaveLength(0);
 	});
 
-	it.each([
-		{ outcome: "accepted", deferred: false },
-		{ outcome: "cancelled", deferred: false },
-		{ outcome: "stale_state", deferred: false },
-		{ outcome: "accepted", deferred: true },
-		{ outcome: "cancelled", deferred: true },
-		{ outcome: "stale_state", deferred: true },
-	])(
-		"continues after $outcome (deferred: $deferred)",
-		async ({ outcome, deferred }) => {
+	it.each(
+		[
+			{ outcome: "accepted", deferred: false },
+			{ outcome: "cancelled", deferred: false },
+			{ outcome: "stale_state", deferred: false },
+			{ outcome: "accepted", deferred: true },
+			{ outcome: "cancelled", deferred: true },
+			{ outcome: "stale_state", deferred: true },
+		].flatMap((testCase) =>
+			[
+				transportContract.canonicalPrefix,
+				...transportContract.compatiblePrefixes,
+				"__CUSTOM_CALL__:",
+			].map((prefix) => ({ ...testCase, prefix })),
+		),
+	)(
+		"continues after $outcome (deferred: $deferred, prefix: $prefix)",
+		async ({ outcome, deferred, prefix }) => {
+			if (prefix === "__CUSTOM_CALL__:")
+				vi.stubEnv("AG_UI_TOOL_CALL_MARKER_PREFIX", prefix);
 			const callId = randomUUID();
 			const threadId = randomUUID();
-			const toolName = deferred
-				? "choose_meta_ad_copy"
-				: "collect_generation_inputs";
+			const toolName = transportContract.call.name;
 			const args = {
 				draftId: "draft-café",
 				draftRevision: 1,
@@ -266,7 +276,7 @@ describe("CopilotKit frontend tool continuation through HTTP middleware", () => 
 						}
 					: { action: "select_product" }),
 			};
-			const marker = `__FRONTEND_TOOL_CALL__:${JSON.stringify({ id: callId, name: toolName, arguments: args })}`;
+			const marker = `${prefix}${JSON.stringify({ id: callId, name: toolName, arguments: args })}`;
 			reply = (_request, res) => {
 				res.type("text/event-stream");
 				if (requests.length === 1) {
@@ -385,6 +395,27 @@ describe("CopilotKit frontend tool continuation through HTTP middleware", () => 
 					}),
 				]),
 			);
+			expect(handler).toHaveBeenCalledTimes(1);
+			expect(
+				agent.messages
+					.filter((message) => message.role === "assistant")
+					.map((message) => message.content ?? "")
+					.join("\n"),
+			).not.toContain(prefix);
+			agent.addMessage({
+				id: randomUUID(),
+				role: "user",
+				content: "Start another action",
+			});
+			await core.runAgent({ agent });
+			expect(requests).toHaveLength(3);
+			expect(requests[2].metadata.ag_ui.thread_id).toBe(threadId);
+			expect(requests[2].content).toBe("Start another action");
+			expect(
+				requests[2].metadata.ag_ui.messages.filter(
+					(message) => message.role === "tool" && message.toolCallId === callId,
+				),
+			).toHaveLength(1);
 			expect(handler).toHaveBeenCalledTimes(1);
 			core.removeContext(contextId);
 		},

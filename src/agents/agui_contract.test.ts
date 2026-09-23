@@ -13,6 +13,20 @@ const tools = [
 ];
 
 describe("parseStructuredToolCall", () => {
+	it.each([STRUCTURED_TOOL_MARKER, "__FRONTEND_TOOL_CALL__:"])(
+		"preserves standard prefix %s when a custom prefix is configured",
+		(prefix) => {
+			const call = { id: "call", name: "collect_input", arguments: {} };
+			expect(
+				parseStructuredToolCall(
+					`${prefix}${JSON.stringify(call)}`,
+					tools,
+					"__CUSTOM_CALL__:",
+				),
+			).toEqual(call);
+		},
+	);
+
 	it("preserves the producer call ID from the neutral marker", () => {
 		const marker = `${STRUCTURED_TOOL_MARKER}${JSON.stringify({
 			id: "provider-call-456",
