@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "canonicalPrefix": "__AGUI_TOOL_CALL__:",
+  "compatiblePrefixes": ["__FRONTEND_TOOL_CALL__:"],
+  "call": {
+    "id": "contract-call-1",
+    "name": "edit_record",
+    "arguments": {"recordId": "record-1", "revision": 1, "value": "updated"}
+  },
+  "events": ["TOOL_CALL_START", "TOOL_CALL_ARGS", "TOOL_CALL_END"],
+  "result": {
+    "id": "contract-result-1",
+    "role": "tool",
+    "toolCallId": "contract-call-1",
+    "content": "{\"outcome\":\"accepted\"}"
+  }
+}

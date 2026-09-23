@@ -64,6 +64,9 @@ export type StructuredToolCall = z.infer<typeof StructuredToolCallSchema>;
 /** Neutral marker for any backend that streams a client-owned tool call. */
 export const STRUCTURED_TOOL_MARKER = "__AGUI_TOOL_CALL__:";
 
+/** Previous generic frontend-call envelope. Preserve it during rolling upgrades. */
+export const COMPATIBLE_TOOL_MARKER = "__FRONTEND_TOOL_CALL__:";
+
 /**
  * Parse a structured client-owned tool call.
  *
@@ -75,9 +78,14 @@ export function parseStructuredToolCall(
 	tools: AguiRunEnvelope["tools"],
 	prefix = STRUCTURED_TOOL_MARKER,
 ): StructuredToolCall | null {
-	if (!content.startsWith(prefix)) return null;
+	const matchedPrefix = [
+		prefix,
+		STRUCTURED_TOOL_MARKER,
+		COMPATIBLE_TOOL_MARKER,
+	].find((candidate) => candidate.length > 0 && content.startsWith(candidate));
+	if (!matchedPrefix) return null;
 	const call = StructuredToolCallSchema.parse(
-		JSON.parse(content.slice(prefix.length)),
+		JSON.parse(content.slice(matchedPrefix.length)),
 	);
 	if (!tools.some((tool) => tool.name === call.name)) {
 		throw new Error(
