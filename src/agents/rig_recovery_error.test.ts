@@ -34,4 +34,32 @@ describe("Rig recovery error", () => {
 	it("does not interpret other failures as a pending call", async () => {
 		expect(await readRigRecoveryError(new Error("private"))).toBeUndefined();
 	});
+
+	it("returns a stable code for a known continuation rejection", async () => {
+		const result = await readRigRecoveryError(
+			responseError(
+				Readable.from([
+					JSON.stringify({
+						error:
+							"Failed to continue tool result: tool result does not match current Native setup",
+					}),
+				]),
+				400,
+			),
+		);
+		expect(result).toMatchObject({
+			name: "RigContinuationRejectedError",
+			code: "RIG_CONTINUATION_TOOL_RESULT_DOES_NOT_MATCH_CURRENT_NATIVE_SETUP",
+		});
+	});
+
+	it("does not expose an unknown 400 body", async () => {
+		const result = await readRigRecoveryError(
+			responseError(
+				Readable.from([JSON.stringify({ error: "private upstream detail" })]),
+				400,
+			),
+		);
+		expect(result).toBeUndefined();
+	});
 });

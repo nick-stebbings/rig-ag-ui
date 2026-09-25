@@ -17,7 +17,11 @@ import {
 	STRUCTURED_TOOL_MARKER,
 	parseStructuredToolCall,
 } from "./agui_contract";
-import { RigRecoveryError, readRigRecoveryError } from "./rig_recovery_error";
+import {
+	RigContinuationRejectedError,
+	RigRecoveryError,
+	readRigRecoveryError,
+} from "./rig_recovery_error";
 
 const UUID_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -684,7 +688,11 @@ export class RigAbstractAgent extends EventEmitter {
 				timestamp: Date.now(),
 				data: {
 					...this.state.errorContext,
-					...(error instanceof RigRecoveryError ? error.recovery : {}),
+					...(error instanceof RigRecoveryError
+						? error.recovery
+						: error instanceof RigContinuationRejectedError
+							? { code: error.code }
+							: {}),
 				},
 			};
 			observer.next(errorEvent);
