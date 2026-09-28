@@ -778,7 +778,7 @@ export class RigAbstractAgent extends EventEmitter {
 			const decoder = new StringDecoder("utf8");
 			let pendingLine = "";
 			const frontendCalls = new Map<string, string>();
-			const failStream = (error: Error) => {
+			const failStream = (error: Error, code = "RIG_STREAM_ERROR") => {
 				if (streamCompleted) return;
 				streamCompleted = true;
 				this.state.status = "errored";
@@ -786,7 +786,7 @@ export class RigAbstractAgent extends EventEmitter {
 					type: EventType.RUN_ERROR,
 					threadId: this.threadId,
 					runId,
-					data: { message: error.message, code: "RIG_STREAM_ERROR" },
+					data: { message: error.message, code },
 				};
 				observer.next(event);
 				subscriber?.next?.(event);
@@ -819,6 +819,17 @@ export class RigAbstractAgent extends EventEmitter {
 								eventData.content ??
 								eventData.chunk?.content ??
 								eventData.data?.chunk?.content;
+							if (
+								typeof marker === "string" &&
+								marker.startsWith("__RUN_ERROR__:")
+							) {
+								// End the run once. Provider details stay in the API logs.
+								failStream(
+									new Error("The model response could not complete"),
+									"MODEL_RESPONSE_FAILED",
+								);
+								return;
+							}
 							if (typeof marker === "string") {
 								const call = parseStructuredToolCall(
 									marker,

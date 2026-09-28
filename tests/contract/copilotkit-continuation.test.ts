@@ -428,6 +428,7 @@ describe("CopilotKit frontend tool continuation through HTTP middleware", () => 
 		"truncated",
 		"disconnect",
 		"conflicting_id",
+		"provider_failure",
 	])(
 		"returns an error without simulated success for %s failure",
 		async (failure) => {
@@ -437,6 +438,8 @@ describe("CopilotKit frontend tool continuation through HTTP middleware", () => 
 					return;
 				}
 				res.type("text/event-stream");
+				if (failure === "provider_failure")
+					res.end(frame('__RUN_ERROR__:{"code":"MODEL_RESPONSE_FAILED"}'));
 				if (failure === "malformed") res.end(frame("__FRONTEND_TOOL_CALL__:{"));
 				if (failure === "unadvertised")
 					res.end(
