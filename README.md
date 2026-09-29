@@ -106,6 +106,13 @@ All variables are read at startup. Copy `.env.example` as a starting point.
 
 Authentication is via the `x-api-key` header, which must match `AGUI_API_KEY`.
 
+Rig can send a terminal model failure as the content marker
+`__RUN_ERROR__:{"code":"MODEL_RESPONSE_FAILED"}`. The middleware converts this
+marker to one `RUN_ERROR` event. It sends no assistant text or successful
+completion for the marker. Provider details stay in the backend logs.
+Deploy middleware support before the backend starts sending this marker.
+The continuation contract test checks this path through the HTTP stream.
+
 ## Agent Discovery
 
 The middleware core does not assume any platform-specific agent catalog endpoint. To populate `/copilotkit/info`, configure either `AGENT_REGISTRY` or `AGENT_DISCOVERY_URL`.
