@@ -7,7 +7,6 @@ import express, {
 	type Response,
 	Router,
 } from "express";
-import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
@@ -17,6 +16,7 @@ import {
 	AguiToolSchema,
 } from "./agents/agui_contract";
 import { metricsMiddleware } from "./middleware/metrics";
+import { createRateLimiters } from "./middleware/rate_limit";
 import {
 	createChildSpan,
 	endChildSpan,
@@ -290,13 +290,11 @@ export class AguiMiddlewareApp {
 		this.app.use("/agents", this.authenticateRequest.bind(this));
 		this.app.use("/copilotkit", this.authenticateRequest.bind(this));
 
-		// Rate limiting
-		const limiter = rateLimit({
-			windowMs: 15 * 60 * 1000, // 15 minutes
-			max: 100, // limit each IP to 100 requests per windowMs
-			message: "Too many requests from this IP, please try again later.",
-		});
-		this.app.use(limiter);
+		// Rate limiting: one limit for each signed-in user and a higher one
+		// for each IP address. See middleware/rate_limit.ts.
+		for (const limiter of createRateLimiters()) {
+			this.app.use(limiter);
+		}
 
 		// Body parsing with error handling
 		this.app.use(
