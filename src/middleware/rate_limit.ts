@@ -83,6 +83,15 @@ export function userRateLimitKey(
 		: `user:${createHash("sha256").update(token).digest("hex").slice(0, 32)}`;
 }
 
+/** Client address: `do-connecting-ip` when present, else `req.ip` (WFL-398: req.ip is a Cloudflare address in production). */
+export function clientIp(
+	req: Pick<Request, "headers" | "ip">,
+): string | undefined {
+	const header = req.headers["do-connecting-ip"];
+	const value = (Array.isArray(header) ? header[0] : header)?.trim();
+	return value ? value : req.ip;
+}
+
 /** The health check is not counted: a monitor must never be limited. */
 export function isExemptFromRateLimit(req: Pick<Request, "path">): boolean {
 	return req.path === "/health";
@@ -98,6 +107,7 @@ export function createRateLimiters(
 		standardHeaders: true,
 		legacyHeaders: false,
 		skip: (req) => isExemptFromRateLimit(req),
+		keyGenerator: (req) => clientIp(req) ?? "unknown",
 		message: "Too many requests from this network, please try again later.",
 	});
 	const userLimiter = rateLimit({

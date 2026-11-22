@@ -16,7 +16,7 @@ import {
 	AguiToolSchema,
 } from "./agents/agui_contract";
 import { metricsMiddleware } from "./middleware/metrics";
-import { createRateLimiters } from "./middleware/rate_limit";
+import { clientIp, createRateLimiters } from "./middleware/rate_limit";
 import {
 	createChildSpan,
 	endChildSpan,
@@ -1241,7 +1241,7 @@ export class AguiMiddlewareApp {
 			console.log("Authentication failed:", {
 				hasApiKey: !!apiKey,
 				apiKeyMatches: apiKey === expectedApiKey,
-				clientIp: req.ip,
+				clientIp: clientIp(req),
 				cleanIp: cleanIp,
 				hostname: req.hostname,
 				isDevelopment,
