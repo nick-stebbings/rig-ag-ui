@@ -2,6 +2,7 @@ import type { AddressInfo } from "node:net";
 import express from "express";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+	clientIp,
 	DEFAULT_RATE_LIMIT_SETTINGS,
 	createRateLimiters,
 	isExemptFromRateLimit,
@@ -56,6 +57,18 @@ describe("user rate limit key", () => {
 	});
 });
 
+describe("client address", () => {
+	it("prefers do-connecting-ip and falls back to req.ip", () => {
+		expect(
+			clientIp({
+				headers: { "do-connecting-ip": "203.0.113.9" },
+				ip: "172.69.1.1",
+			}),
+		).toBe("203.0.113.9");
+		expect(clientIp({ headers: {}, ip: "172.69.1.1" })).toBe("172.69.1.1");
+	});
+});
+
 describe("health check", () => {
 	it("is exempt and other paths are not", () => {
 		expect(isExemptFromRateLimit({ path: "/health" })).toBe(true);
@@ -85,10 +98,17 @@ describe("limiters on a server", () => {
 		return `http://127.0.0.1:${port}`;
 	}
 
-	async function post(base: string, token: string): Promise<number> {
+	async function post(
+		base: string,
+		token: string,
+		ip?: string,
+	): Promise<number> {
 		const response = await fetch(`${base}/agents/run`, {
 			method: "POST",
-			headers: { authorization: `Bearer ${token}` },
+			headers: {
+				authorization: `Bearer ${token}`,
+				...(ip ? { "do-connecting-ip": ip } : {}),
+			},
 		});
 		return response.status;
 	}
@@ -110,6 +130,16 @@ describe("limiters on a server", () => {
 		expect(await post(base, "t2")).toBe(200);
 		// A third request from the address is refused, with any token.
 		expect(await post(base, "t3")).toBe(429);
+	});
+
+	it("keys the address limit on do-connecting-ip behind one proxy address", async () => {
+		const base = await serve(100, 2);
+		// Both come from the same req.ip (the proxy) but different clients.
+		expect(await post(base, "a", "203.0.113.1")).toBe(200);
+		expect(await post(base, "b", "203.0.113.1")).toBe(200);
+		expect(await post(base, "c", "203.0.113.1")).toBe(429);
+		// A different client behind the same proxy has its own allowance.
+		expect(await post(base, "d", "203.0.113.2")).toBe(200);
 	});
 
 	it("counts a request with no token against the address only", async () => {
