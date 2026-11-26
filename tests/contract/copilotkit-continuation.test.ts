@@ -145,6 +145,9 @@ describe("CopilotKit frontend tool continuation through HTTP middleware", () => 
 		).toEqual(threads.sort());
 		for (const item of requests) {
 			expect(item.metadata.ag_ui.messages).toEqual(messages);
+			expect(item.metadata.ag_ui.response_message_id).toMatch(
+				/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+			);
 			expect(item.metadata.ag_ui.tools[0].parameters.$defs).toEqual({
 				action: { enum: ["pick"] },
 			});
