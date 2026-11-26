@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { isUuid, parseToolResultMarker } from "./rig_abstract_agent";
+import {
+	INTERNAL_SERVICE_TOKEN_HEADER,
+	isUuid,
+	parseToolResultMarker,
+	rigApiHeaders,
+} from "./rig_abstract_agent";
 
 describe("parseToolResultMarker", () => {
 	it("parses a well-formed __TOOL_RESULT__ marker into its parts", () => {
@@ -49,5 +54,23 @@ describe("isUuid", () => {
 		expect(isUuid("")).toBe(false);
 		expect(isUuid(undefined)).toBe(false);
 		expect(isUuid("083f404e41bb54a1a464a226df4ce807")).toBe(false);
+	});
+});
+
+describe("rigApiHeaders", () => {
+	it("adds the service token header when a token is set", () => {
+		expect(rigApiHeaders(" fx_token ")).toEqual({
+			"Content-Type": "application/json",
+			[INTERNAL_SERVICE_TOKEN_HEADER]: "fx_token",
+		});
+	});
+
+	it("leaves the header out when the token is unset or blank", () => {
+		expect(rigApiHeaders(undefined)).not.toHaveProperty(
+			INTERNAL_SERVICE_TOKEN_HEADER,
+		);
+		expect(rigApiHeaders("  ")).not.toHaveProperty(
+			INTERNAL_SERVICE_TOKEN_HEADER,
+		);
 	});
 });

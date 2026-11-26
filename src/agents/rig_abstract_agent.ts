@@ -139,6 +139,24 @@ export interface BaseEvent {
 /**
  * Configuration options for creating a {@link RigAbstractAgent}.
  */
+/** Header the Rig API checks on every `/internal/rig` call. */
+export const INTERNAL_SERVICE_TOKEN_HEADER = "X-Internal-Service-Token";
+
+/**
+ * Default headers for Rig API requests. The service token header is left out
+ * when the token is unset or blank.
+ */
+export function rigApiHeaders(token?: string): Record<string, string> {
+	const headers: Record<string, string> = {
+		"Content-Type": "application/json",
+	};
+	const trimmed = token?.trim();
+	if (trimmed) {
+		headers[INTERNAL_SERVICE_TOKEN_HEADER] = trimmed;
+	}
+	return headers;
+}
+
 export interface AgentConfig {
 	agentId?: string;
 	description?: string;
@@ -146,6 +164,8 @@ export interface AgentConfig {
 	initialMessages?: Message[];
 	initialState?: AgentState;
 	rigApiBaseUrl?: string;
+	/** Sent as `X-Internal-Service-Token`. Defaults to `INTERNAL_SERVICE_TOKEN`. */
+	internalServiceToken?: string;
 	/** Application-specific hooks for domain logic (workflow naming, progress, etc.). */
 	appConfig?: RigAgentAppConfig;
 }
@@ -339,9 +359,9 @@ export class RigAbstractAgent extends EventEmitter {
 		this.rigApiClient = axios.create({
 			baseURL: this.rigApiBaseUrl,
 			timeout,
-			headers: {
-				"Content-Type": "application/json",
-			},
+			headers: rigApiHeaders(
+				config.internalServiceToken ?? process.env.INTERNAL_SERVICE_TOKEN,
+			),
 		});
 
 		// Add request interceptor for trace context propagation

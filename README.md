@@ -72,6 +72,7 @@ All variables are read at startup. Copy `.env.example` as a starting point.
 | `LOG_LEVEL` | `info` | Winston log level (`debug`, `info`, `warn`, `error`) |
 | `RIG_API_BASE_URL` | `http://localhost:8080` | Base URL of the Rig backend host |
 | `RIG_API_PATH` | `/internal/rig` | Optional shared path prefix prepended before `/sessions` endpoints |
+| `INTERNAL_SERVICE_TOKEN` | *(unset)* | Sent as `X-Internal-Service-Token` on every Rig API call. Must equal the API's `TEMPORAL_CALLBACK_SECRET`. Without it the API returns 401 |
 | `AGUI_API_KEY` | `development-key` | API key clients must send in the `x-api-key` header |
 | `AG_UI_TOOL_CALL_MARKER_PREFIX` | `__AGUI_TOOL_CALL__:` | Additional prefix for a structured backend tool call. The standard prefix and the compatible `__FRONTEND_TOOL_CALL__:` prefix remain accepted. The payload contains `id`, `name`, and `arguments`. |
 | `AGENT_REGISTRY` | *(unset)* | Static JSON object mapping agent IDs to metadata; returned by `/copilotkit/info` |

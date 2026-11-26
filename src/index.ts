@@ -61,6 +61,11 @@ async function startServer(): Promise<void> {
 		logger.info(`Rig API URL: ${RIG_API_URL}`);
 		logger.info(`Log Level: ${process.env.LOG_LEVEL || "info"}`);
 		logger.info(`Allowed Origins: ${process.env.ALLOWED_ORIGINS || "*"}`);
+		if (!process.env.INTERNAL_SERVICE_TOKEN?.trim()) {
+			logger.warn(
+				"INTERNAL_SERVICE_TOKEN is not set; the Rig API rejects /internal/rig calls without it",
+			);
+		}
 
 		logger.info("Step 1: Creating AguiMiddlewareApp instance...");
 		const middlewareApp = new AguiMiddlewareApp({ rigApiBaseUrl: RIG_API_URL });
