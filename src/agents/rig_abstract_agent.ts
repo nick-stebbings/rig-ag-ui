@@ -756,7 +756,7 @@ export class RigAbstractAgent extends EventEmitter {
 					auth_token: authToken,
 					user_id: this.getUserIdFromMetadata(),
 					metadata: agui
-						? { context, ag_ui: agui }
+						? { context, ag_ui: { ...agui, response_message_id: messageId } }
 						: context.length > 0
 							? { context }
 							: undefined,

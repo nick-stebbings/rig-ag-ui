@@ -51,6 +51,8 @@ export interface AguiRunEnvelope {
 	messages: z.infer<typeof AguiMessageSchema>[];
 	tools: z.infer<typeof AguiToolSchema>[];
 	state?: unknown;
+	/** The id this run's assistant message is streamed under, so the backend can save it under the same id. */
+	response_message_id?: string;
 }
 
 const StructuredToolCallSchema = z.object({
